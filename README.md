@@ -164,7 +164,6 @@ end
 
 -- ───────────────────────────── Window ───────────────────────────────
 local Window = Library:Window({ Name = "Dragon Ware", SubName = "MentalityUI", Logo = LOGO })
-Library:KeybindList("Keybinds")
 
 Window:Category("Main")
 Window:TabDivider()
@@ -1744,7 +1743,7 @@ for i, a in ipairs(actions) do
 end
 
 -- ═════════════════════════════ Init ═════════════════════════════════
-Library:CreateSettingsPage(Window, Library:KeybindList("Keybinds"))
+Library:CreateSettingsPage(Window)
 Window:Init()
 notify("Dragon Ware", "Loaded. Press End to panic-unload.", 3)
 return nil
