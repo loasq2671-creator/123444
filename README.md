@@ -1,49 +1,57 @@
 --[[
-    Dragon Ware — built on WindUI (Footagesus/WindUI)
-    Features: movement, camera, lighting, MM2 tools, silent aim,
-              wallbang, killaura, kill all, kill sounds, auras,
-              kill effects, crosshair, anti-fling, FPS booster,
-              bomb jump, bundle animation, mobile buttons, binds.
-    Only works in MM2.
+    Dragon Ware — Facility UI Edition
+    MM2 only.
+    Ауры через MeshPart-torus. Silent Aim встроен в "Shoot Murderer".
+    + Fun Tab: tracers, dodge, char fx, fun actions, bullet tracers, DW users
+    + Меню по LeftControl
 ]]
 
--- ───────────────────────────── Services ─────────────────────────────
-local Players           = game:GetService("Players")
-local RunService        = game:GetService("RunService")
-local UserInputService  = game:GetService("UserInputService")
-local Lighting          = game:GetService("Lighting")
-local TeleportService   = game:GetService("TeleportService")
-local VirtualUser       = game:GetService("VirtualUser")
-local SoundService      = game:GetService("SoundService")
-local Debris            = game:GetService("Debris")
-local VIM               = game:GetService("VirtualInputManager")
-local CoreGui           = game:GetService("CoreGui")
-local RS                = game:GetService("ReplicatedStorage")
+-- ─────────────── Services ───────────────
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting         = game:GetService("Lighting")
+local TeleportService  = game:GetService("TeleportService")
+local VirtualUser      = game:GetService("VirtualUser")
+local SoundService     = game:GetService("SoundService")
+local Debris           = game:GetService("Debris")
+local VIM              = game:GetService("VirtualInputManager")
+local CoreGui          = game:GetService("CoreGui")
+local RS               = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera      = workspace.CurrentCamera
+local Mouse       = LocalPlayer:GetMouse()
 
--- ═══════════════════════ GAME GUARD ═══════════════════════════
+-- ─────────────── Game Guard ───────────────
 local ALLOWED_PLACES = { [142823291] = "Murder Mystery 2" }
-do
-    if not ALLOWED_PLACES[game.PlaceId] then
-        local list = ""
-        for _, n in pairs(ALLOWED_PLACES) do list = list .. " • " .. n .. "\n" end
-        pcall(function()
-            LocalPlayer:Kick("\n[Dragon Ware]\n\nThis script only works in:\n" .. list ..
-                "\nYour PlaceId: " .. tostring(game.PlaceId))
-        end)
-        return
-    end
+if not ALLOWED_PLACES[game.PlaceId] then
+    local list = ""
+    for _, n in pairs(ALLOWED_PLACES) do list = list .. " • " .. n .. "\n" end
+    pcall(function()
+        LocalPlayer:Kick("\n[Dragon Ware]\n\nOnly works in:\n" .. list ..
+            "\nPlaceId: " .. tostring(game.PlaceId))
+    end)
+    return
 end
--- ═══════════════════════════════════════════════════════════════
 
--- ───────────────────────────── WindUI ───────────────────────────────
-local WindUI = loadstring(game:HttpGet(
-    "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
-))()
+-- ─────────────── Facility UI ───────────────
+local BASE = "https://raw.githubusercontent.com/FacilityHUB/UI-Facility/refs/heads/main/"
+local src = game:HttpGet(BASE .. "main.luau")
+assert(#src > 1000 and not string.find(src, "404", 1, true), "Facility main.luau not found")
 
--- ───────────────────────────── State ────────────────────────────────
+local chunk, err = loadstring(src)
+assert(chunk, "Facility compile error: " .. tostring(err))
+
+local Library = chunk()
+assert(type(Library) == "table", "Facility returned no table")
+Library.BaseUrl = BASE
+
+local SaveManager      = Library.SaveManager
+local InterfaceManager = Library.InterfaceManager
+local ThemeManager     = Library.ThemeManager
+
+-- ─────────────── State ───────────────
 local DW = {
     Connections = {}, Cleanups = {},
     flying = false, flinging = false, noclip = false, mm2Running = true,
@@ -77,15 +85,20 @@ local DW = {
     espObjs = {}, watchedHums = {},
     gunDrop = nil, grabbing = false, autoGrab = false,
 
-    -- Shooting / Silent Aim
     shooting = false,
     prediction = 0.08,
     aimPart = "Head",
     wallbangOn = false,
+
+    -- SILENT AIM
     silentAimOn = false,
-    shootRemoteName = "",
-    shootRemote = nil,
+    silentAimMethod = "All",
+    bulletSpeed = 2500,
+    silentPrediction = 0.08,
+    cachedTargetPos = nil,
+    cachedTargetPart = nil,
     oldNamecall = nil,
+    oldIndex = nil,
 
     kauraOn = false, kauraDelay = 0, kauraRadius = 12,
     kauraMethod = "Activate", kauraIgnoreSheriff = true,
@@ -98,7 +111,7 @@ local DW = {
 
     auraOn = false,
     auraColor = Color3.fromRGB(179, 165, 255),
-    auraSize = 4, auraTransparency = 0.5,
+    auraSize = 4, auraThickness = 0.6, auraTransparency = 0.5,
     auraRainbow = false, auraSpin = true, auraSpeed = 3,
     auraParticles = true, auraLight = true, auraObjects = {},
 
@@ -115,7 +128,6 @@ local DW = {
     fpsBoostOn = false, fpsBoostLevel = "Medium", fpsBoostClean = {},
 
     tradeRemotes = {}, selectedPlayer = nil, whitelist = {},
-    autoTradeOn = false, autoTradeInterval = 3, autoTradeLast = 0,
 
     bombJumpPower = 250, bombJumpHorizontal = 0, bombJumpAuto = false,
 
@@ -124,6 +136,33 @@ local DW = {
     buttonSize = 130, onScreen = {}, savedPositions = {},
 
     killAllOn = false, killAllInterval = 0.5, killAllLast = 0, killAllRange = 500,
+
+    antiAfk = true,
+
+    -- FUN: tracers (общие ESP-трассы)
+    tracersOn = false, tracerMurderer = true, tracerSheriff = false,
+    tracerColorM = Color3.fromRGB(255, 60, 60),
+    tracerColorS = Color3.fromRGB(70, 140, 255),
+    tracerThickness = 2, tracerObjs = {},
+
+    dodgeOn = false, dodgeRadius = 30, dodgePower = 60,
+
+    charFireOn = false, charRainbowOn = false,
+    charSparklesOn = false, charLightOn = false, rainbowHue = 0,
+
+    -- BULLET TRACERS
+    bulletTracersOn    = false,
+    bulletTracerColor  = Color3.fromRGB(255, 230, 100),
+    bulletTracerThick  = 0.15,
+    bulletTracerLife   = 0.35,
+    tracerFolder       = nil,
+
+    -- DRAGON WARE USERS
+    dwUsersOn    = false,
+    dwKorbloxOn  = true,
+    dwHeadlessOn = true,
+    dwUsers      = {},
+    dwVisuals    = {},
 }
 
 local Connections = DW.Connections
@@ -134,7 +173,7 @@ local function track(conn)
     return conn
 end
 
--- ───────────────────────────── Helpers ──────────────────────────────
+-- ─────────────── Helpers ───────────────
 local function getChar() return LocalPlayer.Character end
 local function getHum()
     local c = getChar()
@@ -149,85 +188,410 @@ local function guiParent()
     return (ok and h) or CoreGui
 end
 local function notify(title, desc, dur, style)
-    WindUI:Notify({
-        Title = title,
-        Content = desc or "",
-        Duration = dur or 3,
-        Icon = "bell",
-        Style = style or "Info",
-    })
+    pcall(function()
+        Library:Notify({
+            Title = title,
+            Text = desc or "",
+            Duration = dur or 3,
+            Style = style or "accent",
+        })
+    end)
 end
 
--- ───────────────────────────── Window ───────────────────────────────
-local Window = WindUI:CreateWindow({
+-- ─────────────── Role / Tools ───────────────
+local function hasTool(plr, name)
+    local char = plr.Character
+    local pack = plr:FindFirstChildOfClass("Backpack")
+    return (char and char:FindFirstChild(name)) or (pack and pack:FindFirstChild(name)) or nil
+end
+
+local function getRole(plr)
+    local d = DW.roleData[plr.Name]
+    if type(d) == "table" and type(d.Role) == "string" then
+        local r = d.Role
+        if r == "Hero" then r = "Sheriff" end
+        if r == "Murderer" or r == "Sheriff" then return r end
+        return "Innocent"
+    end
+    if hasTool(plr, "Knife") then return "Murderer" end
+    if hasTool(plr, "Gun") or hasTool(plr, "Revolver") then return "Sheriff" end
+    return "Innocent"
+end
+
+local function getMurderer()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and getRole(plr) == "Murderer" then return plr end
+    end
+end
+local function getSheriff()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and getRole(plr) == "Sheriff" then return plr end
+    end
+end
+
+local function refreshRoles()
+    if DW.fetching then return end
+    DW.fetching = true
+    task.spawn(function()
+        local ok, data = pcall(function()
+            return RS.Remotes.Extras.GetPlayerData:InvokeServer()
+        end)
+        if ok and type(data) == "table" then DW.roleData = data end
+        DW.fetching = false
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════
+-- ═══ BULLET TRACERS + DRAGON WARE USER DETECTION ═══
+-- ══════════════════════════════════════════════════════════════
+
+local tracerFolder = Instance.new("Folder")
+tracerFolder.Name = "DragonWareBulletTracers"
+tracerFolder.Parent = workspace
+DW.tracerFolder = tracerFolder
+table.insert(Cleanups, function() tracerFolder:Destroy() end)
+
+local function drawBulletTracer(from, to, color)
+    if not DW.bulletTracersOn then return end
+    if not from or not to then return end
+    local delta = to - from
+    local dist = delta.Magnitude
+    if dist < 0.5 then return end
+
+    local part = Instance.new("Part")
+    part.Name = "DWTracer"
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.CastShadow = false
+    part.Material = Enum.Material.Neon
+    part.Color = color or DW.bulletTracerColor
+    part.Size = Vector3.new(DW.bulletTracerThick, DW.bulletTracerThick, dist)
+    part.CFrame = CFrame.lookAt((from + to) / 2, to)
+    part.Transparency = 0
+    part.Parent = tracerFolder
+
+    task.spawn(function()
+        local life = DW.bulletTracerLife
+        local steps = 10
+        for i = 1, steps do
+            if not part.Parent then return end
+            part.Transparency = i / steps
+            task.wait(life / steps)
+        end
+        pcall(function() part:Destroy() end)
+    end)
+end
+DW.drawBulletTracer = drawBulletTracer
+
+-- ---- Маркер DW-юзера на себе ----
+local function markSelfAsDwUser()
+    local char = getChar()
+    if not char then return end
+    pcall(function() char:SetAttribute("DragonWareUser", true) end)
+    if not char:FindFirstChild("DragonWareMarker") then
+        local marker = Instance.new("BoolValue")
+        marker.Name = "DragonWareMarker"
+        marker.Value = true
+        marker.Parent = char
+    end
+end
+markSelfAsDwUser()
+track(LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.3); markSelfAsDwUser()
+end))
+
+local function isDwUser(plr)
+    if plr == LocalPlayer then return true end
+    local char = plr.Character
+    if not char then return false end
+    if char:GetAttribute("DragonWareUser") then return true end
+    if char:FindFirstChild("DragonWareMarker") then return true end
+    return false
+end
+
+local KORBLOX_MESH = "rbxassetid://1394481756"
+
+local function removeDwVisuals(plr)
+    local v = DW.dwVisuals[plr]
+    if not v then return end
+    if v.korblox then pcall(function() v.korblox:Destroy() end) end
+    if v.headRefs then
+        for _, ref in ipairs(v.headRefs) do
+            pcall(function() ref.obj.Transparency = ref.old end)
+        end
+    end
+    if v.legRefs then
+        for _, ref in ipairs(v.legRefs) do
+            pcall(function() ref.obj.Transparency = ref.old end)
+        end
+    end
+    DW.dwVisuals[plr] = nil
+end
+
+local function applyDwVisuals(plr)
+    local char = plr.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+
+    local v = DW.dwVisuals[plr]
+    if v and v.char == char then return end
+    removeDwVisuals(plr)
+    v = { char = char, headRefs = {}, legRefs = {} }
+
+    if DW.dwHeadlessOn then
+        local head = char:FindFirstChild("Head")
+        if head and head:IsA("BasePart") then
+            table.insert(v.headRefs, { obj = head, old = head.Transparency })
+            head.Transparency = 1
+            for _, h in ipairs(head:GetChildren()) do
+                if h:IsA("Decal") or h:IsA("SpecialMesh") then
+                    if h:IsA("Decal") then
+                        table.insert(v.headRefs, { obj = h, old = h.Transparency })
+                        h.Transparency = 1
+                    end
+                end
+            end
+        end
+        for _, acc in ipairs(char:GetChildren()) do
+            if acc:IsA("Accessory") then
+                local handle = acc:FindFirstChild("Handle")
+                if handle and handle:IsA("BasePart") then
+                    table.insert(v.headRefs, { obj = handle, old = handle.Transparency })
+                    handle.Transparency = 1
+                end
+            end
+        end
+    end
+
+    if DW.dwKorbloxOn then
+        for _, name in ipairs({"RightUpperLeg", "RightLowerLeg", "RightFoot"}) do
+            local p = char:FindFirstChild(name)
+            if p and p:IsA("BasePart") then
+                table.insert(v.legRefs, { obj = p, old = p.Transparency })
+                p.Transparency = 1
+            end
+        end
+
+        local upperLeg = char:FindFirstChild("RightUpperLeg")
+        if upperLeg then
+            local bone = Instance.new("MeshPart")
+            bone.Name = "DW_KorbloxBone"
+            bone.MeshId = KORBLOX_MESH
+            bone.TextureId = ""
+            bone.Anchored = true
+            bone.CanCollide = false
+            bone.CanQuery = false
+            bone.CanTouch = false
+            bone.CastShadow = false
+            bone.Massless = true
+            bone.Material = Enum.Material.SmoothPlastic
+            bone.Color = Color3.fromRGB(20, 20, 20)
+            bone.Size = Vector3.new(1, 2.5, 1)
+            bone.CFrame = upperLeg.CFrame * CFrame.new(0, -1.2, 0)
+            bone.Parent = tracerFolder
+            v.korblox = bone
+        end
+    end
+
+    DW.dwVisuals[plr] = v
+end
+
+track(RunService.RenderStepped:Connect(function()
+    for plr, v in pairs(DW.dwVisuals) do
+        if v.korblox and v.char then
+            local leg = v.char:FindFirstChild("RightUpperLeg")
+            if leg and leg.Parent and v.korblox.Parent then
+                v.korblox.CFrame = leg.CFrame * CFrame.new(0, -1.2, 0)
+            end
+        end
+    end
+end))
+
+task.spawn(function()
+    while DW.mm2Running do
+        if DW.dwUsersOn then
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr == LocalPlayer then continue end
+                if isDwUser(plr) then
+                    DW.dwUsers[plr] = true
+                    if plr.Character then
+                        applyDwVisuals(plr)
+                    end
+                else
+                    if DW.dwUsers[plr] then
+                        DW.dwUsers[plr] = nil
+                        removeDwVisuals(plr)
+                    end
+                end
+            end
+        else
+            if next(DW.dwVisuals) then
+                for plr in pairs(DW.dwVisuals) do removeDwVisuals(plr) end
+            end
+            table.clear(DW.dwUsers)
+        end
+        task.wait(0.4)
+    end
+end)
+
+track(Players.PlayerRemoving:Connect(function(plr)
+    DW.dwUsers[plr] = nil
+    removeDwVisuals(plr)
+end))
+
+track(Players.PlayerAdded:Connect(function(plr)
+    track(plr.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        if DW.dwUsersOn and isDwUser(plr) then
+            applyDwVisuals(plr)
+        end
+    end))
+end))
+
+-- ══════════════════════════════════════════════════════════════
+-- ═══ SILENT AIM core ═══
+-- ══════════════════════════════════════════════════════════════
+local GRAVITY = Vector3.new(0, -workspace.Gravity, 0)
+
+track(RunService.Heartbeat:Connect(function()
+    if not DW.silentAimOn then
+        DW.cachedTargetPos = nil
+        DW.cachedTargetPart = nil
+        return
+    end
+    local murd = getMurderer()
+    if murd and murd.Character then
+        local tHrp = murd.Character:FindFirstChild("HumanoidRootPart")
+        local myRoot = getRoot()
+        if tHrp and myRoot then
+            local origin = myRoot.Position
+            local targetPos = tHrp.Position
+            local targetVel = tHrp.AssemblyLinearVelocity
+            local dist = (targetPos - origin).Magnitude
+            local t = dist / math.max(DW.bulletSpeed, 1)
+            local predicted = targetPos + targetVel * t
+
+            local hum = murd.Character:FindFirstChildOfClass("Humanoid")
+            if hum then
+                local state = hum:GetState()
+                if state == Enum.HumanoidStateType.Freefall
+                    or state == Enum.HumanoidStateType.Jumping
+                    or math.abs(targetVel.Y) > 0.1 then
+                    predicted = predicted + 0.5 * GRAVITY * (t * t)
+                end
+            end
+            DW.cachedTargetPos = predicted
+            DW.cachedTargetPart = tHrp
+        else
+            DW.cachedTargetPos = nil
+            DW.cachedTargetPart = nil
+        end
+    else
+        DW.cachedTargetPos = nil
+        DW.cachedTargetPart = nil
+    end
+end))
+
+if hookmetamethod and newcclosure and checkcaller then
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        if DW.silentAimOn and DW.cachedTargetPos and not checkcaller() then
+            if DW.silentAimMethod == "Hook" or DW.silentAimMethod == "All" then
+                local method = getnamecallmethod()
+                local args = { ... }
+                if method == "Raycast" and typeof(args[1]) == "Vector3" then
+                    args[2] = (DW.cachedTargetPos - args[1]).Unit * 1000
+                    return oldNamecall(self, table.unpack(args))
+                elseif (method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRay")
+                    and typeof(args[1]) == "Ray" then
+                    args[1] = Ray.new(args[1].Origin,
+                        (DW.cachedTargetPos - args[1].Origin).Unit * 1000)
+                    return oldNamecall(self, table.unpack(args))
+                end
+            end
+        end
+        return oldNamecall(self, ...)
+    end))
+    DW.oldNamecall = oldNamecall
+
+    local oldIndex
+    oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
+        if DW.silentAimOn and DW.cachedTargetPos and not checkcaller() and self == Mouse then
+            if key == "Hit" and (DW.silentAimMethod == "CFrame" or DW.silentAimMethod == "All") then
+                return CFrame.new(DW.cachedTargetPos)
+            elseif key == "Target" and (DW.silentAimMethod == "Index" or DW.silentAimMethod == "All") then
+                return DW.cachedTargetPart
+            end
+        end
+        return oldIndex(self, key)
+    end))
+    DW.oldIndex = oldIndex
+end
+
+-- ─────────────── Window ───────────────
+local Window = Library:Window({
     Title = "Dragon Ware",
-    Icon = "dragon",
-    Author = "MM2 Client-side",
-    Folder = "DragonWare",
-    Size = UDim2.fromOffset(700, 500),
-    Transparent = true,
-    Theme = "Dark",
-    SideBarWidth = 180,
-    User = { Enabled = true, Anonymous = false },
-    KeyBindMenu = { Title = "Keybinds", DefaultKey = "Zero" },
+    Suffix = ".mm2",
+    Width = 720,
+    Height = 640,
+    TabStyle = "side",
+    TabWidth = 170,
+    MobileButton = true,
 })
 
--- ═════════════════════════════ PLAYER TAB ══════════════════════════
+-- ─────────────── PLAYER TAB ───────────────
 local PlayerTab = Window:Tab({ Title = "Player", Icon = "user" })
 
-local MovementSec = PlayerTab:Section({ Title = "Movement" })
+local MoveSec = PlayerTab:Section("Movement", 1)
 
-MovementSec:Toggle({
-    Title = "Custom walk speed", Value = false,
+MoveSec:Toggle({
+    Text = "Custom walk speed", Flag = "dw_speedOn", Default = false,
     Callback = function(v)
         DW.speedOn = v
         if not v then local h = getHum(); if h then h.WalkSpeed = 16 end end
     end,
 })
-MovementSec:Slider({
-    Title = "Walk speed", Value = { Min = 16, Max = 120, Default = 16 },
+MoveSec:Slider({
+    Text = "Walk speed", Flag = "dw_speedVal", Min = 16, Max = 120, Default = 16,
     Callback = function(v) DW.speedVal = v end,
 })
-MovementSec:Toggle({
-    Title = "Custom jump power", Value = false,
+MoveSec:Toggle({
+    Text = "Custom jump power", Flag = "dw_jumpOn", Default = false,
     Callback = function(v)
         DW.jumpOn = v
         if not v then local h = getHum(); if h then h.UseJumpPower = true; h.JumpPower = 50 end end
     end,
 })
-MovementSec:Slider({
-    Title = "Jump power", Value = { Min = 50, Max = 250, Default = 50 },
+MoveSec:Slider({
+    Text = "Jump power", Flag = "dw_jumpVal", Min = 50, Max = 250, Default = 50,
     Callback = function(v) DW.jumpVal = v end,
 })
-MovementSec:Slider({
-    Title = "Gravity", Value = { Min = 20, Max = 300, Default = math.floor(DW.defaultGravity) },
+MoveSec:Slider({
+    Text = "Gravity", Flag = "dw_gravity", Min = 20, Max = 300, Default = math.floor(DW.defaultGravity),
     Callback = function(v) workspace.Gravity = v end,
 })
-MovementSec:Button({
-    Title = "Reset gravity", Icon = "rotate-ccw",
+MoveSec:Button({
+    Text = "Reset gravity",
     Callback = function()
         workspace.Gravity = DW.defaultGravity
-        notify("Gravity", "Restored.", 2, "Success")
+        notify("Gravity", "Restored.", 2, "success")
     end,
 })
 
 track(RunService.Heartbeat:Connect(function()
-    local h = getHum()
-    if not h then return end
+    local h = getHum(); if not h then return end
     if DW.speedOn then h.WalkSpeed = DW.speedVal end
     if DW.jumpOn then h.UseJumpPower = true; h.JumpPower = DW.jumpVal end
 end))
 
--- Bomb Jump
-local BombSec = PlayerTab:Section({ Title = "Bomb Jump" })
-BombSec:Slider({
-    Title = "Bomb jump power", Value = { Min = 50, Max = 600, Default = 250 },
-    Callback = function(v) DW.bombJumpPower = v end,
-})
-BombSec:Slider({
-    Title = "Horizontal boost", Value = { Min = 0, Max = 300, Default = 0 },
-    Callback = function(v) DW.bombJumpHorizontal = v end,
-})
+local BombSec = PlayerTab:Section("Bomb Jump", 1)
+BombSec:Slider({ Text = "Bomb jump power", Flag = "dw_bjPower", Min = 50, Max = 600, Default = 250,
+    Callback = function(v) DW.bombJumpPower = v end })
+BombSec:Slider({ Text = "Horizontal boost", Flag = "dw_bjHor", Min = 0, Max = 300, Default = 0,
+    Callback = function(v) DW.bombJumpHorizontal = v end })
 
 local function bombJump()
     local root, hum = getRoot(), getHum()
@@ -240,34 +604,23 @@ local function bombJump()
     root.AssemblyLinearVelocity = Vector3.new(forward.X, DW.bombJumpPower, forward.Z)
 end
 
-BombSec:Button({ Title = "Launch now", Icon = "rocket", Callback = bombJump })
-BombSec:Toggle({
-    Title = "Auto bomb jump (Space)", Value = false,
-    Callback = function(v) DW.bombJumpAuto = v end,
-})
+BombSec:Button({ Text = "Launch now", Callback = bombJump })
+BombSec:Toggle({ Text = "Auto bomb jump (Space)", Flag = "dw_bjAuto", Default = false,
+    Callback = function(v) DW.bombJumpAuto = v end })
+
 track(UserInputService.JumpRequest:Connect(function()
-    if not DW.bombJumpAuto then return end
-    bombJump()
+    if DW.bombJumpAuto then bombJump() end
 end))
 
--- Speed Glitch
-local GlitchSec = PlayerTab:Section({ Title = "Speed Glitch" })
-GlitchSec:Toggle({
-    Title = "Enable", Value = false,
-    Callback = function(v) DW.glitchOn = v end,
-})
-GlitchSec:Slider({
-    Title = "Jump speed", Value = { Min = 16, Max = 300, Default = 60 },
-    Callback = function(v) DW.glitchSpeed = v end,
-})
-GlitchSec:Dropdown({
-    Title = "Mode", Values = { "Jump", "Always" }, Value = "Jump",
-    Callback = function(v) DW.glitchMode = v end,
-})
-GlitchSec:Dropdown({
-    Title = "Method", Values = { "Velocity", "CFrame" }, Value = "Velocity",
-    Callback = function(v) DW.glitchMethod = v end,
-})
+local GlitchSec = PlayerTab:Section("Speed Glitch", 2)
+GlitchSec:Toggle({ Text = "Enable", Flag = "dw_glitchOn", Default = false,
+    Callback = function(v) DW.glitchOn = v end })
+GlitchSec:Slider({ Text = "Jump speed", Flag = "dw_glitchSpeed", Min = 16, Max = 300, Default = 60,
+    Callback = function(v) DW.glitchSpeed = v end })
+GlitchSec:Dropdown({ Text = "Mode", Flag = "dw_glitchMode", Options = { "Jump", "Always" }, Default = "Jump",
+    Callback = function(v) DW.glitchMode = v end })
+GlitchSec:Dropdown({ Text = "Method", Flag = "dw_glitchMethod", Options = { "Velocity", "CFrame" }, Default = "Velocity",
+    Callback = function(v) DW.glitchMethod = v end })
 
 track(RunService.Heartbeat:Connect(function(dt)
     if not DW.glitchOn or DW.flying or DW.flinging then return end
@@ -286,44 +639,35 @@ track(RunService.Heartbeat:Connect(function(dt)
     end
 end))
 
--- Abilities
-local AbilSec = PlayerTab:Section({ Title = "Abilities" })
+local AbilSec = PlayerTab:Section("Abilities", 2)
 
-AbilSec:Toggle({
-    Title = "Infinite jump", Value = false,
-    Callback = function(v) DW.infJump = v end,
-})
+AbilSec:Toggle({ Text = "Infinite jump", Flag = "dw_infJump", Default = false,
+    Callback = function(v) DW.infJump = v end })
+
 track(UserInputService.JumpRequest:Connect(function()
-    if not DW.infJump then return end
-    local h = getHum()
-    if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    if DW.infJump then
+        local h = getHum()
+        if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
 end))
 
-AbilSec:Toggle({
-    Title = "Noclip", Value = false,
-    Callback = function(v) DW.noclip = v end,
-})
+AbilSec:Toggle({ Text = "Noclip", Flag = "dw_noclip", Default = false,
+    Callback = function(v) DW.noclip = v end })
+
 track(RunService.Stepped:Connect(function()
     if not DW.noclip then return end
-    local c = getChar()
-    if not c then return end
+    local c = getChar(); if not c then return end
     for _, p in ipairs(c:GetDescendants()) do
         if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
     end
 end))
 
-AbilSec:Toggle({
-    Title = "Spin bot", Value = false,
-    Callback = function(v) DW.spinOn = v end,
-})
-AbilSec:Slider({
-    Title = "Spin speed", Value = { Min = 200, Max = 8000, Default = 2200 },
-    Callback = function(v) DW.spinSpeed = v end,
-})
-AbilSec:Dropdown({
-    Title = "Spin axis", Values = { "Y", "XY", "XYZ" }, Value = "Y",
-    Callback = function(v) DW.spinAxis = v end,
-})
+AbilSec:Toggle({ Text = "Spin bot", Flag = "dw_spinOn", Default = false,
+    Callback = function(v) DW.spinOn = v end })
+AbilSec:Slider({ Text = "Spin speed", Flag = "dw_spinSpeed", Min = 200, Max = 8000, Default = 2200,
+    Callback = function(v) DW.spinSpeed = v end })
+AbilSec:Dropdown({ Text = "Spin axis", Flag = "dw_spinAxis", Options = { "Y", "XY", "XYZ" }, Default = "Y",
+    Callback = function(v) DW.spinAxis = v end })
 
 track(RunService.Heartbeat:Connect(function(dt)
     if not DW.spinOn or DW.flying or DW.flinging then return end
@@ -340,6 +684,7 @@ local function stopFly()
     if DW.flyBG then DW.flyBG:Destroy(); DW.flyBG = nil end
     local h = getHum(); if h then h.PlatformStand = false end
 end
+
 local function startFly()
     local root, hum = getRoot(), getHum()
     if not root or not hum then return end
@@ -356,14 +701,10 @@ local function startFly()
     DW.flyBG.Parent = root
 end
 
-AbilSec:Toggle({
-    Title = "Fly", Value = false,
-    Callback = function(v) if v then startFly() else stopFly() end end,
-})
-AbilSec:Slider({
-    Title = "Fly speed", Value = { Min = 10, Max = 250, Default = 60 },
-    Callback = function(v) DW.flySpeed = v end,
-})
+AbilSec:Toggle({ Text = "Fly", Flag = "dw_fly", Default = false,
+    Callback = function(v) if v then startFly() else stopFly() end end })
+AbilSec:Slider({ Text = "Fly speed", Flag = "dw_flySpeed", Min = 10, Max = 250, Default = 60,
+    Callback = function(v) DW.flySpeed = v end })
 
 track(RunService.RenderStepped:Connect(function()
     if not DW.flying or not DW.flyBV or not DW.flyBG then return end
@@ -387,8 +728,7 @@ track(LocalPlayer.CharacterAdded:Connect(function()
     end
 end))
 
--- Bundle Animation
-local AnimSec = PlayerTab:Section({ Title = "Bundle Animation" })
+local AnimSec = PlayerTab:Section("Bundle Animation", 1)
 
 local animPresets = {
     None          = "",
@@ -398,6 +738,7 @@ local animPresets = {
     Robot         = "rbxassetid://6495505137",
     DefaultIdle   = "rbxassetid://507766666",
 }
+
 local function stopBundleAnim()
     if DW.bundleAnimTrack then
         pcall(function() DW.bundleAnimTrack:Stop() end)
@@ -405,15 +746,14 @@ local function stopBundleAnim()
     end
     DW.bundleAnimPlaying = false
 end
+
 local function playBundleAnim(id)
     stopBundleAnim()
     if not id or id == "" then return end
     local char = getChar(); if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid"); if not hum then return end
     local animator = hum:FindFirstChildOfClass("Animator")
-    if not animator then
-        animator = Instance.new("Animator"); animator.Parent = hum
-    end
+    if not animator then animator = Instance.new("Animator"); animator.Parent = hum end
     local anim = Instance.new("Animation")
     anim.AnimationId = id
     local ok, tr = pcall(function() return animator:LoadAnimation(anim) end)
@@ -427,9 +767,9 @@ local function playBundleAnim(id)
 end
 
 AnimSec:Dropdown({
-    Title = "Preset",
-    Values = { "None", "GangnamStyle", "Floss", "OrangeJustice", "Robot", "DefaultIdle" },
-    Value = "None",
+    Text = "Preset", Flag = "dw_animPreset",
+    Options = { "None", "GangnamStyle", "Floss", "OrangeJustice", "Robot", "DefaultIdle" },
+    Default = "None",
     Callback = function(v)
         local id = animPresets[v]
         DW.bundleAnimId = id
@@ -437,7 +777,7 @@ AnimSec:Dropdown({
     end,
 })
 AnimSec:Input({
-    Title = "Custom animation ID", Value = "",
+    Text = "Custom animation ID", Flag = "dw_animId", Default = "",
     Placeholder = "rbxassetid://...",
     Callback = function(s)
         if s == "" then return end
@@ -446,79 +786,68 @@ AnimSec:Input({
         playBundleAnim(s)
     end,
 })
-AnimSec:Button({
-    Title = "Play animation", Icon = "play",
+AnimSec:Button({ Text = "Play animation",
     Callback = function()
-        if DW.bundleAnimId == "" then notify("Bundle Animation", "ID пустой.", 2, "Warning"); return end
+        if DW.bundleAnimId == "" then notify("Bundle Animation", "ID пустой.", 2, "warning"); return end
         playBundleAnim(DW.bundleAnimId)
     end,
 })
-AnimSec:Button({ Title = "Stop animation", Icon = "square", Callback = stopBundleAnim })
+AnimSec:Button({ Text = "Stop animation", Callback = stopBundleAnim })
+
 track(LocalPlayer.CharacterAdded:Connect(function()
     stopBundleAnim()
-    if DW.bundleAnimId ~= "" then
-        task.wait(0.5); playBundleAnim(DW.bundleAnimId)
-    end
+    if DW.bundleAnimId ~= "" then task.wait(0.5); playBundleAnim(DW.bundleAnimId) end
 end))
 
--- ═════════════════════════════ WORLD TAB ═══════════════════════════
+-- ─────────────── WORLD TAB ───────────────
 local WorldTab = Window:Tab({ Title = "World", Icon = "globe" })
 
-local CamSec = WorldTab:Section({ Title = "Camera" })
-CamSec:Toggle({
-    Title = "Custom FOV", Value = false,
+local CamSec = WorldTab:Section("Camera", 1)
+CamSec:Toggle({ Text = "Custom FOV", Flag = "dw_fovOn", Default = false,
     Callback = function(v)
         DW.fovOn = v
         if not v then workspace.CurrentCamera.FieldOfView = DW.defaultFOV end
-    end,
-})
-CamSec:Slider({
-    Title = "Field of view", Value = { Min = 30, Max = 120, Default = 70 },
-    Callback = function(v) DW.fovVal = v end,
-})
+    end })
+CamSec:Slider({ Text = "Field of view", Flag = "dw_fovVal", Min = 30, Max = 120, Default = 70,
+    Callback = function(v) DW.fovVal = v end })
+
 track(RunService.RenderStepped:Connect(function()
     if DW.fovOn then workspace.CurrentCamera.FieldOfView = DW.fovVal end
 end))
-CamSec:Dropdown({
-    Title = "Camera mode", Values = { "Classic", "LockFirstPerson" }, Value = "Classic",
-    Callback = function(v) pcall(function() LocalPlayer.CameraMode = Enum.CameraMode[v] end) end,
-})
 
-local LightSec = WorldTab:Section({ Title = "Lighting" })
-LightSec:Toggle({
-    Title = "Fullbright", Value = false,
+CamSec:Dropdown({ Text = "Camera mode", Flag = "dw_camMode",
+    Options = { "Classic", "LockFirstPerson" }, Default = "Classic",
+    Callback = function(v) pcall(function() LocalPlayer.CameraMode = Enum.CameraMode[v] end) end })
+
+local LightSec = WorldTab:Section("Lighting", 2)
+LightSec:Toggle({ Text = "Fullbright", Flag = "dw_fullbright", Default = false,
     Callback = function(v)
         DW.fullbright = v
         if not v then
-            for k, val in pairs(DW.origLighting) do
-                pcall(function() Lighting[k] = val end)
-            end
+            for k, val in pairs(DW.origLighting) do pcall(function() Lighting[k] = val end) end
         end
-    end,
-})
+    end })
+
 track(RunService.RenderStepped:Connect(function()
     if not DW.fullbright then return end
     Lighting.Brightness = 2; Lighting.ClockTime = 14
     Lighting.FogEnd = 1e6; Lighting.GlobalShadows = false
     Lighting.Ambient = Color3.fromRGB(178, 178, 178)
 end))
-LightSec:Slider({
-    Title = "Time of day", Value = { Min = 0, Max = 24, Default = math.floor(Lighting.ClockTime) },
-    Callback = function(v) if not DW.fullbright then Lighting.ClockTime = v end end,
-})
-LightSec:Colorpicker({
-    Title = "Ambient tint", Default = Lighting.Ambient,
-    Callback = function(c) if not DW.fullbright then Lighting.Ambient = c end end,
-})
 
--- ═════════════════════════════ VISUAL TAB ══════════════════════════
-local VisualTab = Window:Tab({ Title = "Visual", Icon = "sparkles" })
+LightSec:Slider({ Text = "Time of day", Flag = "dw_timeofday", Min = 0, Max = 24, Default = math.floor(Lighting.ClockTime),
+    Callback = function(v) if not DW.fullbright then Lighting.ClockTime = v end end })
+LightSec:ColorPicker({ Text = "Ambient tint", Flag = "dw_ambient", Default = Lighting.Ambient,
+    Callback = function(c) if not DW.fullbright then Lighting.Ambient = c end end })
 
-local AuraSec = VisualTab:Section({ Title = "Auras" })
+-- ─────────────── VISUAL TAB ───────────────
+local VisualTab = Window:Tab({ Title = "Visual", Icon = "eye" })
+
+local AuraSec = VisualTab:Section("Auras", 1)
 
 local auraFolder = Instance.new("Folder")
 auraFolder.Name = "DragonWareAuras"
-auraFolder.Parent = guiParent()
+auraFolder.Parent = workspace
 table.insert(Cleanups, function() auraFolder:Destroy() end)
 
 local function cleanupAura(plr)
@@ -532,19 +861,28 @@ end
 
 local function makeAura(plr, root)
     cleanupAura(plr)
-    local ring = Instance.new("Part")
-    ring.Anchored = true; ring.CanCollide = false; ring.CanQuery = false; ring.CanTouch = false
+    local ring = Instance.new("MeshPart")
+    ring.Name = "AuraRing"
+    ring.Anchored = true
+    ring.CanCollide = false
+    ring.CanQuery = false
+    ring.CanTouch = false
+    ring.CastShadow = false
+    ring.MeshId = "rbxassetid://12221759"
+    ring.TextureId = ""
     ring.Material = Enum.Material.Neon
-    ring.Color = DW.auraColor; ring.Transparency = DW.auraTransparency
-    ring.Size = Vector3.new(DW.auraSize, 0.08, DW.auraSize)
-    ring.Shape = Enum.PartType.Cylinder
-    ring.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, 0, math.rad(90))
+    ring.Color = DW.auraColor
+    ring.Transparency = DW.auraTransparency
+    ring.Size = Vector3.new(DW.auraSize, DW.auraThickness, DW.auraSize)
+    ring.CFrame = CFrame.new(root.Position)
     ring.Parent = auraFolder
+
     local light = Instance.new("PointLight")
     light.Color = DW.auraColor
     light.Brightness = DW.auraLight and 3 or 0
     light.Range = DW.auraSize * 2
     light.Parent = ring
+
     local particles = Instance.new("ParticleEmitter")
     particles.Texture = "rbxassetid://241876428"
     particles.Color = ColorSequence.new(DW.auraColor)
@@ -558,13 +896,16 @@ local function makeAura(plr, root)
         NumberSequenceKeypoint.new(0.3, 0.2),
         NumberSequenceKeypoint.new(1, 1),
     })
-    particles.Lifetime = NumberRange.new(1, 1.5); particles.Rate = 40
+    particles.Lifetime = NumberRange.new(1, 1.5)
+    particles.Rate = 40
     particles.Speed = NumberRange.new(0.5, 2)
     particles.SpreadAngle = Vector2.new(180, 180)
     particles.Acceleration = Vector3.new(0, 5, 0)
-    particles.LightEmission = 1; particles.LightInfluence = 0
+    particles.LightEmission = 1
+    particles.LightInfluence = 0
     particles.Enabled = DW.auraParticles
     particles.Parent = ring
+
     DW.auraObjects[plr] = { ring = ring, light = light, particles = particles }
 end
 
@@ -583,20 +924,23 @@ task.spawn(function()
                     makeAura(plr, root); o = DW.auraObjects[plr]
                 end
                 if not o then continue end
+
                 local yRot = DW.auraSpin and math.rad(tick() * 60 * DW.auraSpeed) or 0
-                o.ring.Size = Vector3.new(DW.auraSize, 0.08, DW.auraSize)
-                o.ring.CFrame = CFrame.new(root.Position)
-                    * CFrame.Angles(0, yRot, 0) * CFrame.Angles(0, 0, math.rad(90))
+                o.ring.Size = Vector3.new(DW.auraSize, DW.auraThickness, DW.auraSize)
+                o.ring.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, yRot, 0)
                 o.ring.Transparency = DW.auraTransparency
                 o.light.Brightness = DW.auraLight and 3 or 0
                 o.light.Range = DW.auraSize * 2
                 if o.particles then o.particles.Enabled = DW.auraParticles end
+
                 if DW.auraRainbow then
                     local col = Color3.fromHSV((tick() * 0.2) % 1, 0.8, 1)
-                    o.ring.Color = col; o.light.Color = col
+                    o.ring.Color = col
+                    o.light.Color = col
                     if o.particles then o.particles.Color = ColorSequence.new(col) end
                 else
-                    o.ring.Color = DW.auraColor; o.light.Color = DW.auraColor
+                    o.ring.Color = DW.auraColor
+                    o.light.Color = DW.auraColor
                     if o.particles then o.particles.Color = ColorSequence.new(DW.auraColor) end
                 end
             end
@@ -606,67 +950,77 @@ task.spawn(function()
         task.wait(0.05)
     end
 end)
+
 track(Players.PlayerRemoving:Connect(cleanupAura))
 
-AuraSec:Toggle({
-    Title = "Enable auras", Value = false,
-    Callback = function(v) DW.auraOn = v end,
-})
+AuraSec:Toggle({ Text = "Enable auras", Flag = "dw_auraOn", Default = false,
+    Callback = function(v) DW.auraOn = v end })
 
 local auraPresets = {
-    Default = { color = Color3.fromRGB(179,165,255), size = 4, speed = 3, transparency = 0.5, rainbow = false },
-    Demon   = { color = Color3.fromRGB(255,40,40),   size = 5, speed = 5, transparency = 0.3, rainbow = false },
-    Angel   = { color = Color3.fromRGB(255,255,255), size = 6, speed = 2, transparency = 0.4, rainbow = false },
-    Galaxy  = { color = Color3.fromRGB(150,100,255), size = 7, speed = 4, transparency = 0.5, rainbow = true  },
-    Fire    = { color = Color3.fromRGB(255,120,0),   size = 5, speed = 6, transparency = 0.3, rainbow = false },
-    Toxic   = { color = Color3.fromRGB(120,255,0),   size = 4, speed = 4, transparency = 0.4, rainbow = false },
-    Ice     = { color = Color3.fromRGB(100,220,255), size = 5, speed = 2, transparency = 0.4, rainbow = false },
+    Default = { color = Color3.fromRGB(179,165,255), size = 4, speed = 3, transparency = 0.5, rainbow = false, thickness = 0.6 },
+    Demon   = { color = Color3.fromRGB(255,40,40),   size = 5, speed = 5, transparency = 0.3, rainbow = false, thickness = 0.5 },
+    Angel   = { color = Color3.fromRGB(255,255,255), size = 6, speed = 2, transparency = 0.4, rainbow = false, thickness = 0.4 },
+    Galaxy  = { color = Color3.fromRGB(150,100,255), size = 7, speed = 4, transparency = 0.5, rainbow = true,  thickness = 0.7 },
+    Fire    = { color = Color3.fromRGB(255,120,0),   size = 5, speed = 6, transparency = 0.3, rainbow = false, thickness = 0.8 },
+    Toxic   = { color = Color3.fromRGB(120,255,0),   size = 4, speed = 4, transparency = 0.4, rainbow = false, thickness = 0.6 },
+    Ice     = { color = Color3.fromRGB(100,220,255), size = 5, speed = 2, transparency = 0.4, rainbow = false, thickness = 0.5 },
 }
-AuraSec:Dropdown({
-    Title = "Aura preset",
-    Values = { "Default", "Demon", "Angel", "Galaxy", "Fire", "Toxic", "Ice" },
-    Value = "Default",
+
+AuraSec:Dropdown({ Text = "Aura preset", Flag = "dw_auraPreset",
+    Options = { "Default", "Demon", "Angel", "Galaxy", "Fire", "Toxic", "Ice" },
+    Default = "Default",
     Callback = function(v)
         local p = auraPresets[v]; if not p then return end
-        DW.auraColor = p.color; DW.auraSize = p.size
-        DW.auraSpeed = p.speed; DW.auraTransparency = p.transparency
+        DW.auraColor = p.color
+        DW.auraSize = p.size
+        DW.auraSpeed = p.speed
+        DW.auraTransparency = p.transparency
         DW.auraRainbow = p.rainbow
-    end,
-})
-AuraSec:Colorpicker({
-    Title = "Aura color", Default = DW.auraColor,
-    Callback = function(c) DW.auraColor = c end,
-})
-AuraSec:Slider({ Title = "Aura size", Value = { Min = 2, Max = 20, Default = 4 },
+        DW.auraThickness = p.thickness or 0.6
+    end })
+
+AuraSec:ColorPicker({ Text = "Aura color", Flag = "dw_auraColor", Default = DW.auraColor,
+    Callback = function(c) DW.auraColor = c end })
+AuraSec:Slider({ Text = "Aura size", Flag = "dw_auraSize", Min = 2, Max = 20, Default = 4,
     Callback = function(v) DW.auraSize = v end })
-AuraSec:Slider({ Title = "Transparency", Value = { Min = 0, Max = 1, Default = 0.5 },
+AuraSec:Slider({ Text = "Толщина кольца", Flag = "dw_auraThick", Min = 0.2, Max = 3, Decimals = 2, Default = 0.6,
+    Callback = function(v) DW.auraThickness = v end })
+AuraSec:Slider({ Text = "Transparency", Flag = "dw_auraTrans", Min = 0, Max = 1, Decimals = 2, Default = 0.5,
     Callback = function(v) DW.auraTransparency = v end })
-AuraSec:Toggle({ Title = "Rainbow aura", Value = false,
+AuraSec:Toggle({ Text = "Rainbow aura", Flag = "dw_auraRainbow", Default = false,
     Callback = function(v) DW.auraRainbow = v end })
-AuraSec:Toggle({ Title = "Spin ring", Value = true,
+AuraSec:Toggle({ Text = "Spin ring", Flag = "dw_auraSpin", Default = true,
     Callback = function(v) DW.auraSpin = v end })
-AuraSec:Slider({ Title = "Spin speed", Value = { Min = 1, Max = 20, Default = 3 },
+AuraSec:Slider({ Text = "Spin speed", Flag = "dw_auraSpeed", Min = 1, Max = 20, Default = 3,
     Callback = function(v) DW.auraSpeed = v end })
-AuraSec:Toggle({ Title = "Particles", Value = true,
+AuraSec:Toggle({ Text = "Particles", Flag = "dw_auraParts", Default = true,
     Callback = function(v) DW.auraParticles = v end })
-AuraSec:Toggle({ Title = "Point light", Value = true,
+AuraSec:Toggle({ Text = "Point light", Flag = "dw_auraLight", Default = true,
     Callback = function(v) DW.auraLight = v end })
 
--- Kill Effect
-local KillFxSec = VisualTab:Section({ Title = "Kill Effect" })
+local KillFxSec = VisualTab:Section("Kill Effect", 1)
+
 local killFxFolder = Instance.new("Folder")
 killFxFolder.Name = "DragonWareKillFX"
-killFxFolder.Parent = guiParent()
+killFxFolder.Parent = workspace
 table.insert(Cleanups, function() killFxFolder:Destroy() end)
 
 local function spawnKillEffect(position)
     if not DW.killFxOn or not position then return end
     local color = DW.killFxRainbow and Color3.fromHSV((tick() * 0.3) % 1, 0.85, 1) or DW.killFxColor
+
     if DW.killFxType == "Explosion" or DW.killFxType == "Sparkles" then
         local part = Instance.new("Part")
-        part.Anchored = true; part.CanCollide = false; part.CanQuery = false; part.CanTouch = false
-        part.Transparency = 1; part.Size = Vector3.new(0.1, 0.1, 0.1)
-        part.CFrame = CFrame.new(position); part.Parent = killFxFolder
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanQuery = false
+        part.CanTouch = false
+        part.CastShadow = false
+        part.Transparency = 1
+        part.Size = Vector3.new(0.1, 0.1, 0.1)
+        part.CFrame = CFrame.new(position)
+        part.Parent = killFxFolder
+
         local emitter = Instance.new("ParticleEmitter")
         emitter.Texture = "rbxassetid://241876428"
         emitter.Color = ColorSequence.new(color)
@@ -675,43 +1029,74 @@ local function spawnKillEffect(position)
             NumberSequenceKeypoint.new(0.3, DW.killFxSize),
             NumberSequenceKeypoint.new(1, 0),
         })
+        emitter.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.2),
+            NumberSequenceKeypoint.new(1, 1),
+        })
         emitter.Lifetime = NumberRange.new(0.8, 1.4)
         emitter.Speed = NumberRange.new(20, 40)
         emitter.SpreadAngle = Vector2.new(180, 180)
-        emitter.LightEmission = 1; emitter.Rate = 0
+        emitter.LightEmission = 1
+        emitter.LightInfluence = 0
+        emitter.Rate = 0
         emitter:Emit(DW.killFxType == "Explosion" and 80 or 60)
         emitter.Parent = part
+
         Debris:AddItem(part, 3)
     elseif DW.killFxType == "Fire" then
         local firePart = Instance.new("Part")
-        firePart.Anchored = true; firePart.CanCollide = false; firePart.CanQuery = false; firePart.CanTouch = false
-        firePart.Transparency = 1; firePart.Size = Vector3.new(0.1, 0.1, 0.1)
-        firePart.CFrame = CFrame.new(position); firePart.Parent = killFxFolder
+        firePart.Anchored = true
+        firePart.CanCollide = false
+        firePart.CanQuery = false
+        firePart.CanTouch = false
+        firePart.CastShadow = false
+        firePart.Transparency = 1
+        firePart.Size = Vector3.new(0.1, 0.1, 0.1)
+        firePart.CFrame = CFrame.new(position)
+        firePart.Parent = killFxFolder
+
         local fire = Instance.new("Fire")
-        fire.Color = color; fire.SecondaryColor = color
-        fire.Size = DW.killFxSize; fire.Heat = 5
+        fire.Color = color
+        fire.SecondaryColor = color
+        fire.Size = DW.killFxSize
+        fire.Heat = 5
         fire.Parent = firePart
+
         Debris:AddItem(firePart, 2)
     end
 end
 
-KillFxSec:Toggle({ Title = "Enable kill effect", Value = false,
+KillFxSec:Toggle({ Text = "Enable kill effect", Flag = "dw_killFxOn", Default = false,
     Callback = function(v) DW.killFxOn = v end })
-KillFxSec:Dropdown({ Title = "Effect type",
-    Values = { "Explosion", "Sparkles", "Fire" }, Value = "Explosion",
+KillFxSec:Dropdown({ Text = "Effect type", Flag = "dw_killFxType",
+    Options = { "Explosion", "Sparkles", "Fire" }, Default = "Explosion",
     Callback = function(v) DW.killFxType = v end })
-KillFxSec:Colorpicker({ Title = "Effect color", Default = DW.killFxColor,
+KillFxSec:ColorPicker({ Text = "Effect color", Flag = "dw_killFxColor", Default = DW.killFxColor,
     Callback = function(c) DW.killFxColor = c end })
-KillFxSec:Slider({ Title = "Effect size", Value = { Min = 2, Max = 20, Default = 8 },
+KillFxSec:Slider({ Text = "Effect size", Flag = "dw_killFxSize", Min = 2, Max = 20, Default = 8,
     Callback = function(v) DW.killFxSize = v end })
-KillFxSec:Toggle({ Title = "Rainbow effect", Value = false,
+KillFxSec:Toggle({ Text = "Rainbow effect", Flag = "dw_killFxRainbow", Default = false,
     Callback = function(v) DW.killFxRainbow = v end })
 
--- Crosshair
-local CrossSec = VisualTab:Section({ Title = "Crosshair" })
+KillFxSec:Button({ Text = "Тест (на себе)",
+    Callback = function()
+        local r = getRoot()
+        if r then
+            local prev = DW.killFxOn
+            DW.killFxOn = true
+            spawnKillEffect(r.Position + Vector3.new(0, 2, 0))
+            DW.killFxOn = prev
+            notify("Kill FX", "Тест-эффект создан.", 2, "accent")
+        end
+    end })
+
+local CrossSec = VisualTab:Section("Crosshair", 2)
+
 local crossGui = Instance.new("ScreenGui")
-crossGui.Name = "DragonWareCrosshair"; crossGui.ResetOnSpawn = false
-crossGui.IgnoreGuiInset = true; crossGui.DisplayOrder = 95
+crossGui.Name = "DragonWareCrosshair"
+crossGui.ResetOnSpawn = false
+crossGui.IgnoreGuiInset = true
+crossGui.DisplayOrder = 95
 crossGui.Parent = guiParent()
 table.insert(Cleanups, function() crossGui:Destroy() end)
 
@@ -740,13 +1125,16 @@ local function rebuildCrosshair()
             outer.Parent = crossHolder
         end
         local f = Instance.new("Frame")
-        f.BackgroundColor3 = c; f.BorderSizePixel = 0
+        f.BackgroundColor3 = c
+        f.BorderSizePixel = 0
         f.Position = UDim2.new(0.5, x, 0.5, y)
         f.Size = UDim2.fromOffset(w, h)
         f.AnchorPoint = Vector2.new(0.5, 0.5)
-        f.ZIndex = 3; f.Parent = crossHolder
+        f.ZIndex = 3
+        f.Parent = crossHolder
     end
-    if DW.crossStyle == "Dot" then line(0, 0, t + 1, t + 1)
+    if DW.crossStyle == "Dot" then
+        line(0, 0, t + 1, t + 1)
     elseif DW.crossStyle == "Cross" then
         line(0, -gap - len/2, t, len); line(0, gap + len/2, t, len)
         line(-gap - len/2, 0, len, t); line(gap + len/2, 0, len, t)
@@ -760,79 +1148,39 @@ local function rebuildCrosshair()
         circle.AnchorPoint = Vector2.new(0.5, 0.5)
         circle.Position = UDim2.new(0.5, 0, 0.5, 0)
         circle.Size = UDim2.fromOffset(DW.crossSize * 2, DW.crossSize * 2)
-        circle.ZIndex = 3; circle.Parent = crossHolder
+        circle.ZIndex = 3
+        circle.Parent = crossHolder
         Instance.new("UICorner", circle).CornerRadius = UDim.new(1, 0)
         local stroke = Instance.new("UIStroke", circle)
-        stroke.Color = c; stroke.Thickness = t
+        stroke.Color = c
+        stroke.Thickness = t
     end
 end
 
-CrossSec:Toggle({ Title = "Enable crosshair", Value = false,
+CrossSec:Toggle({ Text = "Enable crosshair", Flag = "dw_crossOn", Default = false,
     Callback = function(v) DW.crossOn = v; rebuildCrosshair() end })
-CrossSec:Dropdown({ Title = "Style",
-    Values = { "Dot", "Cross", "Circle", "Cross+Dot" }, Value = "Cross",
+CrossSec:Dropdown({ Text = "Style", Flag = "dw_crossStyle",
+    Options = { "Dot", "Cross", "Circle", "Cross+Dot" }, Default = "Cross",
     Callback = function(v) DW.crossStyle = v; rebuildCrosshair() end })
-CrossSec:Colorpicker({ Title = "Crosshair color", Default = DW.crossColor,
+CrossSec:ColorPicker({ Text = "Crosshair color", Flag = "dw_crossColor", Default = DW.crossColor,
     Callback = function(c) DW.crossColor = c; rebuildCrosshair() end })
-CrossSec:Slider({ Title = "Size", Value = { Min = 4, Max = 40, Default = 12 },
+CrossSec:Slider({ Text = "Size", Flag = "dw_crossSize", Min = 4, Max = 40, Default = 12,
     Callback = function(v) DW.crossSize = v; rebuildCrosshair() end })
-CrossSec:Slider({ Title = "Thickness", Value = { Min = 1, Max = 6, Default = 2 },
+CrossSec:Slider({ Text = "Thickness", Flag = "dw_crossThick", Min = 1, Max = 6, Default = 2,
     Callback = function(v) DW.crossThickness = v; rebuildCrosshair() end })
-CrossSec:Slider({ Title = "Gap", Value = { Min = 0, Max = 20, Default = 4 },
+CrossSec:Slider({ Text = "Gap", Flag = "dw_crossGap", Min = 0, Max = 20, Default = 4,
     Callback = function(v) DW.crossGap = v; rebuildCrosshair() end })
-CrossSec:Toggle({ Title = "Outline", Value = true,
+CrossSec:Toggle({ Text = "Outline", Flag = "dw_crossOutline", Default = true,
     Callback = function(v) DW.crossOutline = v; rebuildCrosshair() end })
 
--- ═════════════════════════════ MM2 TAB ═════════════════════════════
+-- ─────────────── MM2 TAB ───────────────
 local MM2Tab = Window:Tab({ Title = "MM2", Icon = "sword" })
 
-local function refreshRoles()
-    if DW.fetching then return end
-    DW.fetching = true
-    task.spawn(function()
-        local ok, data = pcall(function()
-            return RS.Remotes.Extras.GetPlayerData:InvokeServer()
-        end)
-        if ok and type(data) == "table" then DW.roleData = data end
-        DW.fetching = false
-    end)
-end
-
-local function hasTool(plr, name)
-    local char = plr.Character
-    local pack = plr:FindFirstChildOfClass("Backpack")
-    return (char and char:FindFirstChild(name)) or (pack and pack:FindFirstChild(name)) or nil
-end
-
-local function getRole(plr)
-    local d = DW.roleData[plr.Name]
-    if type(d) == "table" and type(d.Role) == "string" then
-        local r = d.Role
-        if r == "Hero" then r = "Sheriff" end
-        if r == "Murderer" or r == "Sheriff" then return r end
-        return "Innocent"
-    end
-    if hasTool(plr, "Knife") then return "Murderer" end
-    if hasTool(plr, "Gun") then return "Sheriff" end
-    return "Innocent"
-end
-
-local function getMurderer()
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and getRole(plr) == "Murderer" then return plr end
-    end
-end
-local function getSheriff()
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and getRole(plr) == "Sheriff" then return plr end
-    end
-end
-
--- ESP
-local ESPSec = MM2Tab:Section({ Title = "ESP Roles" })
+local ESPSec = MM2Tab:Section("ESP Roles", 1)
 
 local espFolder = Instance.new("Folder")
-espFolder.Name = "DragonWareESP"; espFolder.Parent = guiParent()
+espFolder.Name = "DragonWareESP"
+espFolder.Parent = guiParent()
 table.insert(Cleanups, function()
     for plr in pairs(DW.espObjs) do
         local o = DW.espObjs[plr]
@@ -860,17 +1208,23 @@ local function ensureESP(plr, char)
     clearESP(plr)
     local hl = Instance.new("Highlight")
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.FillTransparency = 0.55; hl.OutlineTransparency = 0
-    hl.Adornee = char; hl.Parent = espFolder
+    hl.FillTransparency = 0.55
+    hl.OutlineTransparency = 0
+    hl.Adornee = char
+    hl.Parent = espFolder
     local bb = Instance.new("BillboardGui")
-    bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(160, 20)
+    bb.AlwaysOnTop = true
+    bb.Size = UDim2.fromOffset(160, 20)
     bb.StudsOffset = Vector3.new(0, 3, 0)
     bb.Adornee = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
     bb.Parent = espFolder
     local lbl = Instance.new("TextLabel")
-    lbl.BackgroundTransparency = 1; lbl.Size = UDim2.fromScale(1, 1)
-    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 13
-    lbl.TextStrokeTransparency = 0.4; lbl.Parent = bb
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.fromScale(1, 1)
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 13
+    lbl.TextStrokeTransparency = 0.4
+    lbl.Parent = bb
     o = { hl = hl, bb = bb, lbl = lbl, char = char }
     DW.espObjs[plr] = o
     return o
@@ -892,8 +1246,10 @@ task.spawn(function()
                     if DW.roleOn[role] then
                         local o = ensureESP(plr, char)
                         local c = DW.roleColor[role]
-                        o.hl.FillColor = c; o.hl.OutlineColor = c
-                        o.lbl.TextColor3 = c; o.lbl.Visible = DW.showNames
+                        o.hl.FillColor = c
+                        o.hl.OutlineColor = c
+                        o.lbl.TextColor3 = c
+                        o.lbl.Visible = DW.showNames
                         o.lbl.Text = plr.DisplayName .. " [" .. role .. "]"
                     else clearESP(plr) end
                 else clearESP(plr) end
@@ -903,23 +1259,22 @@ task.spawn(function()
     end
 end)
 
-ESPSec:Toggle({ Title = "Murderer ESP", Value = false,
+ESPSec:Toggle({ Text = "Murderer ESP", Flag = "dw_espMurderer", Default = false,
     Callback = function(v) DW.roleOn.Murderer = v end })
-ESPSec:Colorpicker({ Title = "Murderer color", Default = DW.roleColor.Murderer,
+ESPSec:ColorPicker({ Text = "Murderer color", Flag = "dw_colorMurderer", Default = DW.roleColor.Murderer,
     Callback = function(c) DW.roleColor.Murderer = c end })
-ESPSec:Toggle({ Title = "Sheriff ESP", Value = false,
+ESPSec:Toggle({ Text = "Sheriff ESP", Flag = "dw_espSheriff", Default = false,
     Callback = function(v) DW.roleOn.Sheriff = v end })
-ESPSec:Colorpicker({ Title = "Sheriff color", Default = DW.roleColor.Sheriff,
+ESPSec:ColorPicker({ Text = "Sheriff color", Flag = "dw_colorSheriff", Default = DW.roleColor.Sheriff,
     Callback = function(c) DW.roleColor.Sheriff = c end })
-ESPSec:Toggle({ Title = "Innocent ESP", Value = false,
+ESPSec:Toggle({ Text = "Innocent ESP", Flag = "dw_espInnocent", Default = false,
     Callback = function(v) DW.roleOn.Innocent = v end })
-ESPSec:Colorpicker({ Title = "Innocent color", Default = DW.roleColor.Innocent,
+ESPSec:ColorPicker({ Text = "Innocent color", Flag = "dw_colorInnocent", Default = DW.roleColor.Innocent,
     Callback = function(c) DW.roleColor.Innocent = c end })
-ESPSec:Toggle({ Title = "Show names", Value = true,
+ESPSec:Toggle({ Text = "Show names", Flag = "dw_showNames", Default = true,
     Callback = function(v) DW.showNames = v end })
 
--- Gun
-local GunSec = MM2Tab:Section({ Title = "Gun" })
+local GunSec = MM2Tab:Section("Gun", 1)
 
 DW.gunDrop = workspace:FindFirstChild("GunDrop", true)
 track(workspace.DescendantAdded:Connect(function(d)
@@ -939,7 +1294,7 @@ local function grabGun(silent)
     if DW.grabbing then return end
     local root, part = getRoot(), getGunPart()
     if not root or not part then
-        if not silent then notify("Grab gun", "No dropped gun on the map.", 2, "Warning") end
+        if not silent then notify("Grab gun", "No dropped gun on the map.", 2, "warning") end
         return
     end
     if hasTool(LocalPlayer, "Gun") or hasTool(LocalPlayer, "Knife") then return end
@@ -958,15 +1313,15 @@ local function grabGun(silent)
         end
     end
     if not silent then
-        notify("Grab gun", hasTool(LocalPlayer, "Gun") and "Got the gun." or "Tried.", 2, "Success")
+        notify("Grab gun", hasTool(LocalPlayer, "Gun") and "Got the gun." or "Tried.", 2, "success")
     end
     DW.grabbing = false
 end
 
-GunSec:Toggle({ Title = "Auto grab gun", Value = false,
+GunSec:Toggle({ Text = "Auto grab gun", Flag = "dw_autoGrab", Default = false,
     Callback = function(v) DW.autoGrab = v end })
-GunSec:Button({ Title = "Grab gun now", Icon = "hand",
-    Callback = function() grabGun(false) end })
+GunSec:Button({ Text = "Grab gun now", Callback = function() grabGun(false) end })
+
 task.spawn(function()
     while DW.mm2Running do
         if DW.autoGrab then pcall(grabGun, true) end
@@ -974,86 +1329,22 @@ task.spawn(function()
     end
 end)
 
--- ═════════ Shoot murderer + Silent Aim ═════════
-local ShootSec = MM2Tab:Section({ Title = "Shoot Murderer" })
+-- ═══════════════════ SHOOT MURDERER + SILENT AIM ═══════════════════
+local ShootSec = MM2Tab:Section("Shoot Murderer", 2)
 
--- Автопоиск shoot-remote'а
-local function findShootRemote()
-    local candidates = {}
-    for _, obj in ipairs(RS:GetDescendants()) do
-        if obj:IsA("RemoteEvent") then
-            local n = obj.Name:lower()
-            if n == "shoot" or n == "fireserver" or n == "fire"
-               or n == "requestshoot" or n:find("shoot") then
-                table.insert(candidates, obj)
-            end
-        end
-    end
-    if DW.shootRemoteName ~= "" then
-        for _, c in ipairs(candidates) do
-            if c.Name == DW.shootRemoteName then return c end
-        end
-    end
-    return candidates[1]
-end
-DW.shootRemote = findShootRemote()
-
--- Хук __namecall для silent aim
-if hookmetamethod and newcclosure and checkcaller then
-    DW.oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        if method == "FireServer" and not checkcaller() then
-            if self == DW.shootRemote
-               or (DW.silentAimOn and self.Name and self.Name:lower():find("shoot")) then
-                local args = {...}
-                local target = getMurderer()
-
-                if target and target.Character then
-                    local tPart = target.Character:FindFirstChild(DW.aimPart)
-                        or target.Character:FindFirstChild("Head")
-                        or target.Character:FindFirstChild("HumanoidRootPart")
-                    local myRoot = getRoot()
-
-                    if tPart and myRoot then
-                        local aimPos = tPart.Position
-                            + (tPart.AssemblyLinearVelocity * DW.prediction)
-                        local dir = (aimPos - myRoot.Position).Unit
-
-                        for i, arg in ipairs(args) do
-                            if typeof(arg) == "Vector3" then
-                                if (arg - myRoot.Position).Magnitude < 5 then
-                                    args[i] = myRoot.Position
-                                else
-                                    args[i] = dir * 1000
-                                end
-                            elseif typeof(arg) == "CFrame" then
-                                args[i] = CFrame.lookAt(myRoot.Position, aimPos)
-                            end
-                        end
-                        return DW.oldNamecall(self, table.unpack(args))
-                    end
-                end
-            end
-        end
-        return DW.oldNamecall(self, ...)
-    end))
-end
-
--- Основная функция
 local function shootMurderer()
     if DW.shooting then return end
     local gun = hasTool(LocalPlayer, "Gun")
-    if not gun then notify("Shoot murderer", "You don't have the gun.", 2, "Warning"); return end
+    if not gun then notify("Shoot murderer", "You don't have the gun.", 2, "warning"); return end
     refreshRoles()
     local murd = getMurderer()
     local mChar = murd and murd.Character
     local mRoot = mChar and mChar:FindFirstChild("HumanoidRootPart")
     local mHum  = mChar and mChar:FindFirstChildOfClass("Humanoid")
     if not mRoot or not mHum or mHum.Health <= 0 then
-        notify("Shoot murderer", "Murderer not found.", 2, "Warning"); return
+        notify("Shoot murderer", "Murderer not found.", 2, "warning"); return
     end
 
-    -- Wallbang через телепорт
     if DW.wallbangOn then
         local root, hum = getRoot(), getHum()
         if not root or not hum then return end
@@ -1068,27 +1359,35 @@ local function shootMurderer()
         task.wait(0.05)
         root.CFrame = origin
         DW.noclip = prevNoclip
-        notify("Shoot murderer", "Wallbang at " .. murd.DisplayName, 2, "Success")
+        notify("Shoot murderer", "Wallbang at " .. murd.DisplayName, 2, "success")
         return
     end
 
     DW.shooting = true
 
-    -- Экипируем пистолет
     local hum = getHum()
     if hum and gun.Parent ~= getChar() then
         hum:EquipTool(gun); task.wait(0.08)
     end
 
-    -- SILENT AIM: камера не двигается, хук подменит аргументы
+    local function fireTracer(targetPos)
+        if not DW.bulletTracersOn then return end
+        local handle = gun:FindFirstChild("Handle") or gun:FindFirstChildWhichIsA("BasePart")
+        local from = handle and handle.Position
+            or (getRoot() and getRoot().Position + Vector3.new(0, 1.5, 0))
+            or (workspace.CurrentCamera.CFrame.Position)
+        drawBulletTracer(from, targetPos, DW.bulletTracerColor)
+    end
+
     if DW.silentAimOn then
+        local tPart = mChar:FindFirstChild(DW.aimPart) or mRoot
+        fireTracer(tPart.Position)
         pcall(function() gun:Activate() end)
         task.wait(0.35)
         DW.shooting = false
         return
     end
 
-    -- Обычный аим (камера двигается)
     local tPart = mChar:FindFirstChild(DW.aimPart) or mRoot
     local aimPos = tPart.Position + tPart.AssemblyLinearVelocity * DW.prediction
     local cam = workspace.CurrentCamera
@@ -1100,80 +1399,71 @@ local function shootMurderer()
         VIM:SendMouseButtonEvent(sp.X, sp.Y, 0, true, game, 0); task.wait(0.05)
         VIM:SendMouseButtonEvent(sp.X, sp.Y, 0, false, game, 0)
     end)
+    fireTracer(aimPos)
     pcall(function() gun:Activate() end)
     task.wait(0.4)
     DW.shooting = false
 end
 
--- UI Shoot
-ShootSec:Button({ Title = "Shoot murderer", Icon = "target", Callback = shootMurderer })
+ShootSec:Button({ Text = "Shoot murderer", Callback = shootMurderer })
 
 ShootSec:Toggle({
-    Title = "Silent aim", Value = false,
-    Tooltip = "Не двигает камеру — подменяет направление на сервере",
+    Text = "Silent Aim",
+    Flag = "dw_silentAim",
+    Default = false,
+    Hint = "Подмена направления пули на сервере. Камера не двигается.",
     Callback = function(v)
         DW.silentAimOn = v
         if v and not DW.oldNamecall then
-            notify("Silent aim", "Hook недоступен. Работает как обычный аим.", 4, "Warning")
+            notify("Silent Aim", "Hook недоступен — будет обычный аим.", 4, "warning")
         end
     end,
 })
 
-ShootSec:Slider({ Title = "Aim part (1=Head 2=HRP 3=Torso)",
-    Value = { Min = 1, Max = 3, Default = 1 },
+ShootSec:Dropdown({
+    Text = "Silent method",
+    Flag = "dw_silentMethod",
+    Options = { "All", "Hook", "Index", "CFrame" },
+    Default = "All",
+    Callback = function(v) DW.silentAimMethod = v end,
+})
+
+ShootSec:Slider({
+    Text = "Bullet speed",
+    Flag = "dw_bulletSpeed",
+    Min = 500, Max = 6000, Default = 2500,
+    Callback = function(v) DW.bulletSpeed = v end,
+})
+
+ShootSec:Slider({ Text = "Aim part (1=Head 2=HRP 3=Torso)", Flag = "dw_aimPart",
+    Min = 1, Max = 3, Default = 1,
     Callback = function(v)
         local i = math.floor(v + 0.5)
         DW.aimPart = i == 1 and "Head" or i == 2 and "HumanoidRootPart" or "UpperTorso"
     end })
 
-ShootSec:Slider({ Title = "Lead prediction",
-    Value = { Min = 0, Max = 0.4, Default = 0.08 },
+ShootSec:Slider({ Text = "Lead prediction", Flag = "dw_prediction",
+    Min = 0, Max = 0.4, Decimals = 2, Default = 0.08,
     Callback = function(v) DW.prediction = v end })
 
-ShootSec:Toggle({ Title = "Wallbang (teleport)", Value = false,
+ShootSec:Toggle({ Text = "Wallbang (teleport)", Flag = "dw_wallbang", Default = false,
     Callback = function(v) DW.wallbangOn = v end })
 
-ShootSec:Divider()
-
-ShootSec:Label("Remote: " .. (DW.shootRemote and DW.shootRemote:GetFullName() or "(не найден)"))
-
-ShootSec:Input({
-    Title = "Manual remote name", Value = "",
-    Placeholder = "напр. Shoot / FireServer",
-    Callback = function(s)
-        DW.shootRemoteName = s
-        DW.shootRemote = findShootRemote()
-        notify("Remote", DW.shootRemote and ("Found: " .. DW.shootRemote:GetFullName()) or "Не найден", 3,
-            DW.shootRemote and "Success" or "Warning")
-    end,
-})
-
-ShootSec:Button({
-    Title = "Rescan shoot remote", Icon = "refresh-cw",
-    Callback = function()
-        DW.shootRemote = findShootRemote()
-        notify("Remote", DW.shootRemote and ("Found: " .. DW.shootRemote:GetFullName()) or "Не найдено", 3,
-            DW.shootRemote and "Success" or "Warning")
-    end,
-})
-
-ShootSec:Button({
-    Title = "Who is the murderer?", Icon = "search",
+ShootSec:Button({ Text = "Who is the murderer?",
     Callback = function()
         refreshRoles(); task.wait(0.3)
         local m = getMurderer()
-        notify("Murderer", m and m.DisplayName or "Not detected.", 3, "Info")
-    end,
-})
+        notify("Murderer", m and m.DisplayName or "Not detected.", 3, "accent")
+    end })
 
--- Kill All
-local KillAllSec = MM2Tab:Section({ Title = "Kill All" })
+-- ─────────────── Kill All ───────────────
+local KillAllSec = MM2Tab:Section("Kill All", 1)
 
 local function killAll()
     local knife = hasTool(LocalPlayer, "Knife")
     local gun = hasTool(LocalPlayer, "Gun")
     if not knife and not gun then
-        notify("Kill All", "У тебя нет оружия.", 2, "Warning"); return
+        notify("Kill All", "У тебя нет оружия.", 2, "warning"); return
     end
     refreshRoles()
     local myRoot = getRoot(); if not myRoot then return end
@@ -1204,6 +1494,9 @@ local function killAll()
             myRoot.CFrame = pRoot.CFrame + Vector3.new(0, 2, -3)
             RunService.RenderStepped:Wait()
             pcall(function() gun:Activate() end)
+            if DW.bulletTracersOn then
+                drawBulletTracer(myRoot.Position + Vector3.new(0, 1.5, 0), pRoot.Position, DW.bulletTracerColor)
+            end
             task.wait(0.05)
             myRoot.CFrame = origin
             DW.noclip = prevNoclip
@@ -1212,13 +1505,14 @@ local function killAll()
     end
 end
 
-KillAllSec:Button({ Title = "Kill all now", Icon = "skull", Callback = killAll })
-KillAllSec:Slider({ Title = "Range", Value = { Min = 50, Max = 2000, Default = 500 },
+KillAllSec:Button({ Text = "Kill all now", Callback = killAll })
+KillAllSec:Slider({ Text = "Range", Flag = "dw_kaRange", Min = 50, Max = 2000, Default = 500,
     Callback = function(v) DW.killAllRange = v end })
-KillAllSec:Slider({ Title = "Interval", Value = { Min = 0.1, Max = 5, Default = 0.5 },
+KillAllSec:Slider({ Text = "Interval", Flag = "dw_kaInterval", Min = 0.1, Max = 5, Decimals = 1, Default = 0.5,
     Callback = function(v) DW.killAllInterval = v end })
-KillAllSec:Toggle({ Title = "Auto kill all", Value = false,
+KillAllSec:Toggle({ Text = "Auto kill all", Flag = "dw_kaAuto", Default = false,
     Callback = function(v) DW.killAllOn = v end })
+
 task.spawn(function()
     while DW.mm2Running do
         if DW.killAllOn and os.clock() - DW.killAllLast >= DW.killAllInterval then
@@ -1229,8 +1523,7 @@ task.spawn(function()
     end
 end)
 
--- Killaura
-local KauraSec = MM2Tab:Section({ Title = "Killaura" })
+local KauraSec = MM2Tab:Section("Killaura", 2)
 
 local function findKauraTarget()
     local root = getRoot(); if not root then return nil end
@@ -1291,45 +1584,44 @@ task.spawn(function()
     end
 end)
 
-KauraSec:Slider({ Title = "Killaura speed (0 = off)",
-    Value = { Min = 0, Max = 3, Default = 0 },
+KauraSec:Slider({ Text = "Killaura speed (0 = off)", Flag = "dw_kauraSpeed",
+    Min = 0, Max = 3, Decimals = 1, Default = 0,
     Callback = function(v)
         if v <= 0 then DW.kauraOn = false; DW.kauraDelay = 0
         else DW.kauraOn = true; DW.kauraDelay = v end
     end })
-KauraSec:Slider({ Title = "Radius", Value = { Min = 3, Max = 50, Default = 12 },
+KauraSec:Slider({ Text = "Radius", Flag = "dw_kauraRadius", Min = 3, Max = 50, Default = 12,
     Callback = function(v) DW.kauraRadius = v end })
-KauraSec:Dropdown({ Title = "Method",
-    Values = { "Activate", "Teleport" }, Value = "Activate",
+KauraSec:Dropdown({ Text = "Method", Flag = "dw_kauraMethod",
+    Options = { "Activate", "Teleport" }, Default = "Activate",
     Callback = function(v) DW.kauraMethod = v end })
-KauraSec:Dropdown({ Title = "Target priority",
-    Values = { "Nearest", "LowestHP" }, Value = "Nearest",
+KauraSec:Dropdown({ Text = "Target priority", Flag = "dw_kauraTarget",
+    Options = { "Nearest", "LowestHP" }, Default = "Nearest",
     Callback = function(v) DW.kauraTarget = v end })
-KauraSec:Toggle({ Title = "Ignore Sheriff", Value = true,
+KauraSec:Toggle({ Text = "Ignore Sheriff", Flag = "dw_kauraIgnoreSheriff", Default = true,
     Callback = function(v) DW.kauraIgnoreSheriff = v end })
 
--- Fling
-local FlingSec = MM2Tab:Section({ Title = "Fling" })
-FlingSec:Slider({ Title = "Fling power",
-    Value = { Min = 20000, Max = 200000, Default = 80000 },
+local FlingSec = MM2Tab:Section("Fling", 1)
+FlingSec:Slider({ Text = "Fling power", Flag = "dw_flingPower",
+    Min = 20000, Max = 200000, Default = 80000,
     Callback = function(v) DW.flingPower = v end })
-FlingSec:Slider({ Title = "Fling duration",
-    Value = { Min = 0.5, Max = 5, Default = 1.8 },
+FlingSec:Slider({ Text = "Fling duration", Flag = "dw_flingTime",
+    Min = 0.5, Max = 5, Decimals = 1, Default = 1.8,
     Callback = function(v) DW.flingTime = v end })
-FlingSec:Dropdown({ Title = "Fling method",
-    Values = { "Velocity", "Angular", "Both" }, Value = "Both",
+FlingSec:Dropdown({ Text = "Fling method", Flag = "dw_flingMethod",
+    Options = { "Velocity", "Angular", "Both" }, Default = "Both",
     Callback = function(v) DW.flingMethod = v end })
 
 local function flingPlayer(plr, label)
     if DW.flinging then return end
-    if DW.flying then notify("Fling", "Turn Fly off first.", 2, "Warning"); return end
+    if DW.flying then notify("Fling", "Turn Fly off first.", 2, "warning"); return end
     local root, hum = getRoot(), getHum()
     local tChar = plr and plr.Character
     local tRoot = tChar and tChar:FindFirstChild("HumanoidRootPart")
     local tHum = tChar and tChar:FindFirstChildOfClass("Humanoid")
-    if not root or not hum then notify("Fling", "No character.", 2, "Warning"); return end
+    if not root or not hum then notify("Fling", "No character.", 2, "warning"); return end
     if not tRoot or not tHum or tHum.Health <= 0 then
-        notify("Fling", (label or "Target") .. " not found.", 2, "Warning"); return
+        notify("Fling", (label or "Target") .. " not found.", 2, "warning"); return
     end
     DW.flinging = true
     local origin = root.CFrame
@@ -1357,39 +1649,38 @@ local function flingPlayer(plr, label)
     end
     DW.noclip = prevNoclip
     DW.flinging = false
-    notify("Fling", "Flung " .. plr.DisplayName .. ".", 2, "Success")
+    notify("Fling", "Flung " .. plr.DisplayName .. ".", 2, "success")
 end
 
-FlingSec:Button({ Title = "Fling murderer", Icon = "wind",
+FlingSec:Button({ Text = "Fling murderer",
     Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getMurderer(), "Murderer") end })
-FlingSec:Button({ Title = "Fling sheriff", Icon = "wind",
+FlingSec:Button({ Text = "Fling sheriff",
     Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getSheriff(), "Sheriff") end })
 
--- ═════════════════════════════ MISC TAB ═════════════════════════════
+-- ─────────────── MISC TAB ───────────────
 local MiscTab = Window:Tab({ Title = "Misc", Icon = "settings" })
 
-local UtilSec = MiscTab:Section({ Title = "Utility" })
-DW.antiAfk = true
-UtilSec:Toggle({ Title = "Anti-AFK", Value = true,
+local UtilSec = MiscTab:Section("Utility", 1)
+UtilSec:Toggle({ Text = "Anti-AFK", Flag = "dw_antiAfk", Default = true,
     Callback = function(v) DW.antiAfk = v end })
 track(LocalPlayer.Idled:Connect(function()
     if not DW.antiAfk then return end
     pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
 end))
-UtilSec:Button({ Title = "Reset character", Icon = "refresh-cw",
+UtilSec:Button({ Text = "Reset character",
     Callback = function() local h = getHum(); if h then h.Health = 0 end end })
-UtilSec:Input({ Title = "Quick note", Value = "", Placeholder = "Type something...",
-    Callback = function(s) notify("Note", s ~= "" and s or "(empty)", 2, "Info") end })
+UtilSec:Input({ Text = "Quick note", Flag = "dw_note", Default = "", Placeholder = "Type something...",
+    Callback = function(s) notify("Note", s ~= "" and s or "(empty)", 2, "accent") end })
 
-local ServerSec = MiscTab:Section({ Title = "Server" })
-ServerSec:Button({ Title = "Copy Job ID", Icon = "copy",
+local ServerSec = MiscTab:Section("Server", 1)
+ServerSec:Button({ Text = "Copy Job ID",
     Callback = function()
         pcall(function() setclipboard(game.JobId) end)
-        notify("Copied", "Job ID copied.", 2, "Success")
+        notify("Copied", "Job ID copied.", 2, "success")
     end })
-ServerSec:Button({ Title = "Rejoin server", Icon = "log-out",
+ServerSec:Button({ Text = "Rejoin server",
     Callback = function()
-        notify("Rejoining", "Teleporting back…", 2, "Info"); task.wait(0.5)
+        notify("Rejoining", "Teleporting back…", 2, "accent"); task.wait(0.5)
         if #Players:GetPlayers() <= 1 then
             LocalPlayer:Kick("\nRejoining…"); task.wait()
             TeleportService:Teleport(game.PlaceId, LocalPlayer)
@@ -1408,12 +1699,12 @@ local function unloadAll()
     local h = getHum(); if h then h.WalkSpeed = 16; h.JumpPower = 50 end
     for _, c in ipairs(Connections) do pcall(function() c:Disconnect() end) end
     table.clear(Connections)
-    WindUI:Destroy()
+    pcall(function() Window:Destroy() end)
+    pcall(function() Library:Destroy() end)
 end
-ServerSec:Button({ Title = "Unload Dragon Ware", Icon = "x", Callback = unloadAll })
+ServerSec:Button({ Text = "Unload Dragon Ware", Callback = unloadAll })
 
--- Anti-Fling
-local AntiFlingSec = MiscTab:Section({ Title = "Anti-Fling" })
+local AntiFlingSec = MiscTab:Section("Anti-Fling", 2)
 track(RunService.Heartbeat:Connect(function()
     if not DW.antiflingOn then return end
     if DW.flying or DW.flinging then return end
@@ -1431,15 +1722,14 @@ track(RunService.Heartbeat:Connect(function()
     DW.antiflingLastPos = pos
     DW.antiflingLastTime = now
 end))
-AntiFlingSec:Toggle({ Title = "Anti-Fling", Value = false,
+AntiFlingSec:Toggle({ Text = "Anti-Fling", Flag = "dw_antifling", Default = false,
     Callback = function(v) DW.antiflingOn = v; if v then DW.antiflingLastPos = nil end end })
-AntiFlingSec:Slider({ Title = "Threshold", Value = { Min = 20, Max = 500, Default = 100 },
+AntiFlingSec:Slider({ Text = "Threshold", Flag = "dw_afThreshold", Min = 20, Max = 500, Default = 100,
     Callback = function(v) DW.antiflingThreshold = v end })
-AntiFlingSec:Toggle({ Title = "Snap back", Value = true,
+AntiFlingSec:Toggle({ Text = "Snap back", Flag = "dw_afSnap", Default = true,
     Callback = function(v) DW.antiflingSnap = v end })
 
--- FPS Booster
-local FpsSec = MiscTab:Section({ Title = "FPS Booster" })
+local FpsSec = MiscTab:Section("FPS Booster", 2)
 
 local function applyFpsBoost()
     for _, item in ipairs(DW.fpsBoostClean) do
@@ -1465,17 +1755,17 @@ local function applyFpsBoost()
             fx.Enabled = false
         end
     end
-    notify("FPS Booster", "Applied (" .. DW.fpsBoostLevel .. ")", 2, "Success")
+    notify("FPS Booster", "Applied (" .. DW.fpsBoostLevel .. ")", 2, "success")
 end
 
-FpsSec:Toggle({ Title = "FPS Booster", Value = false,
+FpsSec:Toggle({ Text = "FPS Booster", Flag = "dw_fpsBoost", Default = false,
     Callback = function(v) DW.fpsBoostOn = v; applyFpsBoost() end })
-FpsSec:Dropdown({ Title = "Level", Values = { "Low", "Medium", "High" }, Value = "Medium",
+FpsSec:Dropdown({ Text = "Level", Flag = "dw_fpsLevel",
+    Options = { "Low", "Medium", "High" }, Default = "Medium",
     Callback = function(v) DW.fpsBoostLevel = v; if DW.fpsBoostOn then applyFpsBoost() end end })
-FpsSec:Button({ Title = "Apply now", Icon = "zap", Callback = applyFpsBoost })
+FpsSec:Button({ Text = "Apply now", Callback = applyFpsBoost })
 
--- Kill Sound
-local KillSoundSec = MiscTab:Section({ Title = "Kill Sound" })
+local KillSoundSec = MiscTab:Section("Kill Sound", 1)
 local killPacks = {
     Neverlose = "rbxassetid://8679627751", Neverlose2 = "rbxassetid://6895079853",
     Nixware = "rbxassetid://6042053626", Gamesense = "rbxassetid://4814280505",
@@ -1495,8 +1785,10 @@ end
 local function playKillSound()
     local id = getKillSoundId(); if not id or id == "" then return end
     local s = Instance.new("Sound")
-    s.SoundId = id; s.Volume = DW.killSoundVolume
-    s.Parent = SoundService; s:Play()
+    s.SoundId = id
+    s.Volume = DW.killSoundVolume
+    s.Parent = SoundService
+    s:Play()
     Debris:AddItem(s, 6)
 end
 local function watchHumanoid(plr, hum)
@@ -1527,24 +1819,22 @@ end
 for _, plr in ipairs(Players:GetPlayers()) do watchKillerPlayer(plr) end
 track(Players.PlayerAdded:Connect(watchKillerPlayer))
 
-local killSoundToggle = KillSoundSec:Toggle({
-    Title = "Kill sound (murderer death)", Value = false,
+KillSoundSec:Toggle({ Text = "Kill sound (murderer death)", Flag = "dw_killSound", Default = false,
     Callback = function(v) DW.killSoundOn = v end })
-KillSoundSec:Dropdown({ Title = "Sound pack",
-    Values = { "Neverlose", "Neverlose2", "Nixware", "Gamesense", "Fatality", "Skeet", "CSGO", "Headshot", "Hitmarker", "Custom" },
-    Value = "Neverlose",
+KillSoundSec:Dropdown({ Text = "Sound pack", Flag = "dw_killPack",
+    Options = { "Neverlose", "Neverlose2", "Nixware", "Gamesense", "Fatality", "Skeet", "CSGO", "Headshot", "Hitmarker", "Custom" },
+    Default = "Neverlose",
     Callback = function(v) DW.killSoundPack = v end })
-KillSoundSec:Input({ Title = "Custom sound ID", Value = "",
+KillSoundSec:Input({ Text = "Custom sound ID", Flag = "dw_killCustomId", Default = "",
     Placeholder = "rbxassetid://...",
     Callback = function(s) DW.killSoundCustomId = s end })
-KillSoundSec:Slider({ Title = "Volume", Value = { Min = 0.1, Max = 5, Default = 1.5 },
+KillSoundSec:Slider({ Text = "Volume", Flag = "dw_killVol", Min = 0.1, Max = 5, Decimals = 1, Default = 1.5,
     Callback = function(v) DW.killSoundVolume = v end })
-KillSoundSec:Toggle({ Title = "Only when I'm Sheriff", Value = false,
+KillSoundSec:Toggle({ Text = "Only when I'm Sheriff", Flag = "dw_killOnlyMe", Default = false,
     Callback = function(v) DW.killSoundOnlyMe = v end })
-KillSoundSec:Button({ Title = "Test sound", Icon = "music", Callback = playKillSound })
+KillSoundSec:Button({ Text = "Test sound", Callback = playKillSound })
 
--- Trade
-local TradeSec = MiscTab:Section({ Title = "Trade" })
+local TradeSec = MiscTab:Section("Trade", 2)
 local function scanTradeRemotes()
     DW.tradeRemotes = {}
     for _, obj in ipairs(RS:GetDescendants()) do
@@ -1571,9 +1861,11 @@ local function playerNames()
     return names
 end
 
-TradeSec:Dropdown({ Title = "Target player", Values = playerNames(), Value = playerNames()[1],
+local pn = playerNames()
+TradeSec:Dropdown({ Text = "Target player", Flag = "dw_tradeTarget",
+    Options = pn, Default = pn[1],
     Callback = function(v) DW.selectedPlayer = v end })
-TradeSec:Input({ Title = "Whitelist (ники через запятую)", Value = "",
+TradeSec:Input({ Text = "Whitelist (ники через запятую)", Flag = "dw_tradeWL", Default = "",
     Placeholder = "user1, user2",
     Callback = function(s)
         DW.whitelist = {}
@@ -1583,9 +1875,9 @@ TradeSec:Input({ Title = "Whitelist (ники через запятую)", Value
     end })
 
 local function sendTradeRequest(targetName)
-    if not targetName then notify("Trade", "No target.", 2, "Warning"); return end
+    if not targetName then notify("Trade", "No target.", 2, "warning"); return end
     local target = Players:FindFirstChild(targetName)
-    if not target then notify("Trade", "Player not found.", 2, "Warning"); return end
+    if not target then notify("Trade", "Player not found.", 2, "warning"); return end
     local sent = false
     for _, r in ipairs(DW.tradeRemotes) do
         if r:IsA("RemoteEvent") then
@@ -1593,36 +1885,360 @@ local function sendTradeRequest(targetName)
             if sent then break end
         end
     end
-    notify("Trade", sent and ("Sent to " .. target.DisplayName) or "No trade remote.", 2,
-        sent and "Success" or "Warning")
+    notify("Trade", sent and ("Sent to " .. target.DisplayName) or "No trade remote.",
+        2, sent and "success" or "warning")
 end
 
-TradeSec:Button({ Title = "Send trade request", Icon = "send",
+TradeSec:Button({ Text = "Send trade request",
     Callback = function() sendTradeRequest(DW.selectedPlayer) end })
-TradeSec:Button({ Title = "Accept pending trade", Icon = "check",
+TradeSec:Button({ Text = "Accept pending trade",
     Callback = function()
         for _, r in ipairs(DW.tradeRemotes) do
             if r:IsA("RemoteEvent") then pcall(function() r:FireServer("accept") end) end
         end
-        notify("Trade", "Accept sent.", 2, "Success")
+        notify("Trade", "Accept sent.", 2, "success")
     end })
-TradeSec:Button({ Title = "Decline pending trade", Icon = "x",
+TradeSec:Button({ Text = "Decline pending trade",
     Callback = function()
         for _, r in ipairs(DW.tradeRemotes) do
             if r:IsA("RemoteEvent") then pcall(function() r:FireServer("decline") end) end
         end
-        notify("Trade", "Decline sent.", 2, "Success")
+        notify("Trade", "Decline sent.", 2, "success")
     end })
-TradeSec:Button({ Title = "Rescan trade remotes", Icon = "refresh-cw",
+TradeSec:Button({ Text = "Rescan trade remotes",
     Callback = function()
         scanTradeRemotes()
-        notify("Trade", "Found " .. #DW.tradeRemotes .. " remotes.", 3, "Info")
+        notify("Trade", "Found " .. #DW.tradeRemotes .. " remotes.", 3, "accent")
     end })
 
--- ═════════════════════════════ MOBILE TAB ═══════════════════════════
+-- ─────────────── FUN TAB ───────────────
+local FunTab = Window:Tab({ Title = "Fun", Icon = "star" })
+
+-- ── Tracers (ESP-линии к murder/sheriff) ──
+local TracerSec = FunTab:Section("Tracers", 1)
+
+local tracerGui = Instance.new("ScreenGui")
+tracerGui.Name = "DragonWareTracers"
+tracerGui.ResetOnSpawn = false
+tracerGui.IgnoreGuiInset = true
+tracerGui.Parent = guiParent()
+table.insert(Cleanups, function() tracerGui:Destroy() end)
+
+local function clearTracers()
+    for _, o in pairs(DW.tracerObjs) do pcall(function() o:Destroy() end) end
+    DW.tracerObjs = {}
+end
+
+track(RunService.RenderStepped:Connect(function()
+    if not DW.tracersOn then
+        if next(DW.tracerObjs) then clearTracers() end
+        return
+    end
+    local cam = workspace.CurrentCamera
+    local bottom = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+    local keep = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local role = getRole(plr)
+        local col
+        if role == "Murderer" and DW.tracerMurderer then col = DW.tracerColorM
+        elseif role == "Sheriff" and DW.tracerSheriff then col = DW.tracerColorS
+        else continue end
+        local char = plr.Character
+        local head = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
+        if not head then continue end
+        local sp, onScreen = cam:WorldToViewportPoint(head.Position)
+        if not onScreen then continue end
+        local to = Vector2.new(sp.X, sp.Y)
+        local delta = to - bottom
+        local length = delta.Magnitude
+        if length < 1 then continue end
+        local angle = math.deg(math.atan2(delta.Y, delta.X))
+        local f = DW.tracerObjs[plr]
+        if not f then
+            f = Instance.new("Frame")
+            f.BorderSizePixel = 0
+            f.ZIndex = 5
+            f.AnchorPoint = Vector2.new(0, 0.5)
+            f.Parent = tracerGui
+            DW.tracerObjs[plr] = f
+        end
+        f.BackgroundColor3 = col
+        f.Size = UDim2.fromOffset(length, DW.tracerThickness)
+        f.Position = UDim2.fromOffset(bottom.X, bottom.Y)
+        f.Rotation = angle
+        keep[plr] = true
+    end
+    for plr, f in pairs(DW.tracerObjs) do
+        if not keep[plr] then f:Destroy(); DW.tracerObjs[plr] = nil end
+    end
+end))
+
+TracerSec:Toggle({ Text = "Enable tracers", Flag = "dw_tracersOn", Default = false,
+    Callback = function(v) DW.tracersOn = v end })
+TracerSec:Toggle({ Text = "Tracer to Murderer", Flag = "dw_tracerM", Default = true,
+    Callback = function(v) DW.tracerMurderer = v end })
+TracerSec:ColorPicker({ Text = "Murderer tracer color", Flag = "dw_tracerColorM", Default = DW.tracerColorM,
+    Callback = function(c) DW.tracerColorM = c end })
+TracerSec:Toggle({ Text = "Tracer to Sheriff", Flag = "dw_tracerS", Default = false,
+    Callback = function(v) DW.tracerSheriff = v end })
+TracerSec:ColorPicker({ Text = "Sheriff tracer color", Flag = "dw_tracerColorS", Default = DW.tracerColorS,
+    Callback = function(c) DW.tracerColorS = c end })
+TracerSec:Slider({ Text = "Thickness", Flag = "dw_tracerThick", Min = 1, Max = 6, Default = 2,
+    Callback = function(v) DW.tracerThickness = v end })
+
+-- ── Bullet Tracers ──
+local BTSec = FunTab:Section("Bullet Tracers", 1)
+
+BTSec:Toggle({ Text = "Enable bullet tracers", Flag = "dw_bulletTracersOn", Default = false,
+    Callback = function(v) DW.bulletTracersOn = v end })
+BTSec:ColorPicker({ Text = "Tracer color", Flag = "dw_btColor", Default = DW.bulletTracerColor,
+    Callback = function(c) DW.bulletTracerColor = c end })
+BTSec:Slider({ Text = "Thickness", Flag = "dw_btThick", Min = 0.05, Max = 1, Decimals = 2, Default = 0.15,
+    Callback = function(v) DW.bulletTracerThick = v end })
+BTSec:Slider({ Text = "Lifetime (сек)", Flag = "dw_btLife", Min = 0.1, Max = 2, Decimals = 2, Default = 0.35,
+    Callback = function(v) DW.bulletTracerLife = v end })
+BTSec:Button({ Text = "Тест трассера (перед собой)",
+    Callback = function()
+        local r = getRoot()
+        if r and DW.bulletTracersOn then
+            local from = r.Position + Vector3.new(0, 1.5, 0)
+            local to   = from + r.CFrame.LookVector * 40
+            drawBulletTracer(from, to, DW.bulletTracerColor)
+            notify("Bullet Tracers", "Тест создан.", 1.5, "accent")
+        else
+            notify("Bullet Tracers", "Включи тоггл сначала.", 2, "warning")
+        end
+    end })
+
+-- ── Auto-Dodge ──
+local DodgeSec = FunTab:Section("Auto-Dodge", 1)
+
+task.spawn(function()
+    while DW.mm2Running do
+        if DW.dodgeOn then
+            local murd = getMurderer()
+            local myRoot = getRoot()
+            if murd and murd.Character and myRoot then
+                local mRoot = murd.Character:FindFirstChild("HumanoidRootPart")
+                if mRoot then
+                    local delta = myRoot.Position - mRoot.Position
+                    if delta.Magnitude < DW.dodgeRadius and delta.Magnitude > 0.5 then
+                        local away = Vector3.new(delta.X, 0, delta.Z).Unit
+                        myRoot.AssemblyLinearVelocity = Vector3.new(
+                            away.X * DW.dodgePower, DW.dodgePower, away.Z * DW.dodgePower)
+                    end
+                end
+            end
+        end
+        task.wait(0.08)
+    end
+end)
+
+DodgeSec:Toggle({ Text = "Auto-Dodge murderer", Flag = "dw_dodgeOn", Default = false,
+    Callback = function(v) DW.dodgeOn = v end })
+DodgeSec:Slider({ Text = "Trigger radius", Flag = "dw_dodgeRad", Min = 5, Max = 100, Default = 30,
+    Callback = function(v) DW.dodgeRadius = v end })
+DodgeSec:Slider({ Text = "Dodge power", Flag = "dw_dodgePow", Min = 20, Max = 200, Default = 60,
+    Callback = function(v) DW.dodgePower = v end })
+
+-- ── Character Effects ──
+local CharFxSec = FunTab:Section("Character Effects", 1)
+
+task.spawn(function()
+    while DW.mm2Running do
+        local char = getChar()
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+
+            local fire = char:FindFirstChild("DWFire", true)
+            if DW.charFireOn and not fire and hum then
+                fire = Instance.new("Fire")
+                fire.Name = "DWFire"
+                fire.Size = 10
+                fire.Heat = 10
+                fire.Parent = hum
+            elseif not DW.charFireOn and fire then
+                fire:Destroy()
+            end
+
+            local sp = char:FindFirstChild("DWSparkles", true)
+            if DW.charSparklesOn and not sp and hum then
+                sp = Instance.new("Sparkles")
+                sp.Name = "DWSparkles"
+                sp.SparkleColor = Color3.fromRGB(255, 220, 100)
+                sp.Parent = hum
+            elseif not DW.charSparklesOn and sp then
+                sp:Destroy()
+            end
+
+            local pl = char:FindFirstChild("DWLight", true)
+            if DW.charLightOn and not pl and hrp then
+                pl = Instance.new("PointLight")
+                pl.Name = "DWLight"
+                pl.Brightness = 3
+                pl.Range = 20
+                pl.Color = Color3.fromRGB(200, 180, 255)
+                pl.Parent = hrp
+            elseif not DW.charLightOn and pl then
+                pl:Destroy()
+            end
+
+            if DW.charRainbowOn then
+                DW.rainbowHue = (DW.rainbowHue + 0.015) % 1
+                local col = Color3.fromHSV(DW.rainbowHue, 0.8, 1)
+                for _, d in ipairs(char:GetDescendants()) do
+                    if d:IsA("BasePart") and not d:FindFirstChildOfClass("SpecialMesh") then
+                        d.Color = col
+                    end
+                end
+                local pl2 = char:FindFirstChild("DWLight", true)
+                if pl2 and pl2:IsA("PointLight") then pl2.Color = col end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+CharFxSec:Toggle({ Text = "Fire on character", Flag = "dw_charFire", Default = false,
+    Callback = function(v) DW.charFireOn = v end })
+CharFxSec:Toggle({ Text = "Sparkles on character", Flag = "dw_charSparkles", Default = false,
+    Callback = function(v) DW.charSparklesOn = v end })
+CharFxSec:Toggle({ Text = "Rainbow character", Flag = "dw_charRainbow", Default = false,
+    Callback = function(v) DW.charRainbowOn = v end })
+CharFxSec:Toggle({ Text = "Glow (point light)", Flag = "dw_charLight", Default = false,
+    Callback = function(v) DW.charLightOn = v end })
+
+-- ── Dragon Ware Users ──
+local DWUSec = FunTab:Section("Dragon Ware Users", 2)
+
+DWUSec:Toggle({ Text = "Show DW users visuals", Flag = "dw_dwUsersOn", Default = false,
+    Hint = "Корблокс + хедлесс для других игроков с этим же скриптом.",
+    Callback = function(v) DW.dwUsersOn = v end })
+DWUSec:Toggle({ Text = "Korblox (правая нога)", Flag = "dw_dwKorblox", Default = true,
+    Callback = function(v)
+        DW.dwKorbloxOn = v
+        for plr in pairs(DW.dwVisuals) do removeDwVisuals(plr) end
+    end })
+DWUSec:Toggle({ Text = "Headless (голова)", Flag = "dw_dwHeadless", Default = true,
+    Callback = function(v)
+        DW.dwHeadlessOn = v
+        for plr in pairs(DW.dwVisuals) do removeDwVisuals(plr) end
+    end })
+DWUSec:Button({ Text = "Кто сейчас DW-юзер?",
+    Callback = function()
+        local names = {}
+        for plr in pairs(DW.dwUsers) do
+            table.insert(names, plr.DisplayName)
+        end
+        if #names == 0 then
+            notify("DW Users", "Никого не найдено.", 3, "warning")
+        else
+            notify("DW Users (" .. #names .. ")", table.concat(names, ", "), 5, "success")
+        end
+    end })
+
+-- ── Fun Actions ──
+local FunActSec = FunTab:Section("Fun Actions", 2)
+
+FunActSec:Button({ Text = "Teleport to murderer",
+    Callback = function()
+        refreshRoles(); task.wait(0.2)
+        local m = getMurderer()
+        local r = getRoot()
+        local mRoot = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
+        if mRoot and r then
+            r.CFrame = mRoot.CFrame + Vector3.new(0, 3, 0)
+            notify("Fun", "Teleported to " .. m.DisplayName, 2, "success")
+        else
+            notify("Fun", "Murderer not found.", 2, "warning")
+        end
+    end })
+
+FunActSec:Button({ Text = "Teleport murderer to me",
+    Callback = function()
+        refreshRoles(); task.wait(0.2)
+        local m = getMurderer()
+        local r = getRoot()
+        local mRoot = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
+        if mRoot and r then
+            mRoot.CFrame = r.CFrame + r.CFrame.LookVector * 4
+            notify("Fun", "Pulled " .. m.DisplayName, 2, "success")
+        else
+            notify("Fun", "Murderer not found.", 2, "warning")
+        end
+    end })
+
+FunActSec:Button({ Text = "Nuclear fling (all players)",
+    Callback = function()
+        local r = getRoot(); if not r then return end
+        local prevNoclip = DW.noclip; DW.noclip = true
+        notify("Fun", "Nuclear fling launched!", 2, "accent")
+        task.spawn(function()
+            for _ = 1, 50 do
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr == LocalPlayer then continue end
+                    local c = plr.Character
+                    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local pr = getRoot(); if not pr then break end
+                        pr.CFrame = hrp.CFrame
+                        pr.AssemblyLinearVelocity = Vector3.new(5e5, 5e5, 5e5)
+                        pr.AssemblyAngularVelocity = Vector3.new(5e5, 5e5, 5e5)
+                    end
+                end
+                RunService.Heartbeat:Wait()
+            end
+            DW.noclip = prevNoclip
+        end)
+    end })
+
+FunActSec:Button({ Text = "Fake death (ragdoll)",
+    Callback = function()
+        local char = getChar()
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum:ChangeState(Enum.HumanoidStateType.Physics)
+            hum.PlatformStand = true
+            task.wait(2.5)
+            hum.PlatformStand = false
+        end
+    end })
+
+FunActSec:Button({ Text = "Drop everything in backpack",
+    Callback = function()
+        local char = getChar()
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        local pack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        if not pack or not hum then return end
+        for _, tool in ipairs(pack:GetChildren()) do
+            pcall(function() hum:UnequipTools(); tool.Parent = char end)
+        end
+        local c = getChar()
+        if c then
+            for _, tool in ipairs(c:GetChildren()) do
+                if tool:IsA("Tool") then
+                    pcall(function() tool.Parent = workspace end)
+                end
+            end
+        end
+    end })
+
+FunActSec:Button({ Text = "Spam notifications",
+    Callback = function()
+        for i = 1, 6 do
+            task.spawn(function()
+                task.wait(i * 0.15)
+                notify("Fun " .. i, "Спам-сообщение #" .. i, 1.5, "accent")
+            end)
+        end
+    end })
+
+-- ─────────────── MOBILE TAB ───────────────
 local MobileTab = Window:Tab({ Title = "Mobile", Icon = "smartphone" })
 
-local MobileSec = MobileTab:Section({ Title = "Master" })
+local MobileSec = MobileTab:Section("Master", 1)
 
 local btnGui = Instance.new("ScreenGui")
 btnGui.Name = "DragonWareButtons"
@@ -1639,15 +2255,18 @@ local function makeButton(id, text, yOffset, callback)
     b.BackgroundTransparency = 0.15
     b.TextColor3 = Color3.fromRGB(235, 235, 235)
     b.Font = Enum.Font.GothamMedium
-    b.TextSize = 14; b.Text = text
+    b.TextSize = 14
+    b.Text = text
     b.AutoButtonColor = true
     b.Visible = false
     b.Parent = btnGui
 
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8); corner.Parent = b
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = b
     local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(100, 149, 255); stroke.Thickness = 1.2
+    stroke.Color = Color3.fromRGB(100, 149, 255)
+    stroke.Thickness = 1.2
     stroke.Parent = b
 
     local dragging, moved, startInput, startPos = false, false, nil, nil
@@ -1692,11 +2311,11 @@ local actions = {
     { id = "KAura",  text = "Killaura",       cb = function()
           if DW.kauraOn then DW.kauraOn = false; DW.kauraDelay = 0
           else DW.kauraOn = true; DW.kauraDelay = 0.6 end
-          notify("Killaura", DW.kauraOn and "On (0.6s)" or "Off", 1.5, "Info")
+          notify("Killaura", DW.kauraOn and "On (0.6s)" or "Off", 1.5, "accent")
       end },
     { id = "Aura",   text = "Auras",          cb = function() DW.auraOn = not DW.auraOn end },
     { id = "Cross",  text = "Crosshair",      cb = function() DW.crossOn = not DW.crossOn; rebuildCrosshair() end },
-    { id = "KSound", text = "Kill Sound",     cb = function() pcall(function() killSoundToggle:Set(not DW.killSoundOn) end) end },
+    { id = "KSound", text = "Kill Sound",     cb = function() DW.killSoundOn = not DW.killSoundOn end },
     { id = "Anim",   text = "Bundle Anim",    cb = function()
           if DW.bundleAnimPlaying then stopBundleAnim()
           elseif DW.bundleAnimId ~= "" then playBundleAnim(DW.bundleAnimId) end
@@ -1707,67 +2326,115 @@ for i, a in ipairs(actions) do
     makeButton(a.id, a.text, -200 + (i - 1) * 48, a.cb)
 end
 
-MobileSec:Toggle({ Title = "Show all buttons", Value = false,
+MobileSec:Toggle({ Text = "Show all buttons", Flag = "dw_showAllBtns", Default = false,
     Callback = function(v)
         for _, b in pairs(DW.onScreen) do b.Visible = v end
     end })
-MobileSec:Slider({ Title = "Button size", Value = { Min = 80, Max = 200, Default = 130 },
+MobileSec:Slider({ Text = "Button size", Flag = "dw_btnSize", Min = 80, Max = 200, Default = 130,
     Callback = function(v)
         DW.buttonSize = v
         for _, b in pairs(DW.onScreen) do b.Size = UDim2.fromOffset(v, 44) end
     end })
 
-local BtnListSec = MobileTab:Section({ Title = "On-screen buttons" })
+local BtnListSec = MobileTab:Section("On-screen buttons", 2)
 for _, a in ipairs(actions) do
-    BtnListSec:Toggle({ Title = "Show: " .. a.text, Value = false,
+    BtnListSec:Toggle({ Text = "Show: " .. a.text,
         Callback = function(v)
             local b = DW.onScreen[a.id]
             if b then b.Visible = v end
         end })
 end
 
--- ═════════════════════════════ BINDS TAB ════════════════════════════
+-- ─────────────── BINDS TAB ───────────────
 local BindsTab = Window:Tab({ Title = "Binds", Icon = "keyboard" })
-local BindsSec = BindsTab:Section({ Title = "Actions" })
+local BindsSec = BindsTab:Section("Actions", 1)
 
-BindsSec:Keybind({ Title = "Shoot murderer", Value = "Q", Callback = shootMurderer })
-BindsSec:Keybind({ Title = "Grab gun", Value = "G",
+BindsSec:Keybind({ Text = "Shoot murderer", Flag = "dw_kbShoot", Default = "Q", Callback = shootMurderer })
+BindsSec:Keybind({ Text = "Grab gun", Flag = "dw_kbGrab", Default = "G",
     Callback = function() grabGun(false) end })
-BindsSec:Keybind({ Title = "Fling murderer", Value = "Z",
+BindsSec:Keybind({ Text = "Fling murderer", Flag = "dw_kbFlingM", Default = "Z",
     Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getMurderer(), "Murderer") end })
-BindsSec:Keybind({ Title = "Fling sheriff", Value = "C",
+BindsSec:Keybind({ Text = "Fling sheriff", Flag = "dw_kbFlingS", Default = "C",
     Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getSheriff(), "Sheriff") end })
-BindsSec:Keybind({ Title = "Bomb jump", Value = "B", Callback = bombJump })
-BindsSec:Keybind({ Title = "Kill all", Value = "K", Callback = killAll })
-BindsSec:Keybind({ Title = "Killaura toggle", Value = "H",
+BindsSec:Keybind({ Text = "Bomb jump", Flag = "dw_kbBomb", Default = "B", Callback = bombJump })
+BindsSec:Keybind({ Text = "Kill all", Flag = "dw_kbKillAll", Default = "K", Callback = killAll })
+BindsSec:Keybind({ Text = "Killaura toggle", Flag = "dw_kbKaura", Default = "H",
     Callback = function()
         if DW.kauraOn then DW.kauraOn = false; DW.kauraDelay = 0
         else DW.kauraOn = true; DW.kauraDelay = 0.6 end
-        notify("Killaura", DW.kauraOn and "On (0.6s)" or "Off", 1.5, "Info")
+        notify("Killaura", DW.kauraOn and "On (0.6s)" or "Off", 1.5, "accent")
     end })
-BindsSec:Keybind({ Title = "Auras toggle", Value = "J",
+BindsSec:Keybind({ Text = "Auras toggle", Flag = "dw_kbAura", Default = "J",
     Callback = function() DW.auraOn = not DW.auraOn end })
-BindsSec:Keybind({ Title = "Crosshair toggle", Value = "N",
+BindsSec:Keybind({ Text = "Crosshair toggle", Flag = "dw_kbCross", Default = "N",
     Callback = function() DW.crossOn = not DW.crossOn; rebuildCrosshair() end })
-BindsSec:Keybind({ Title = "Kill sound toggle", Value = "M",
-    Callback = function() pcall(function() killSoundToggle:Set(not DW.killSoundOn) end) end })
-BindsSec:Keybind({ Title = "Bundle anim toggle", Value = "L",
+BindsSec:Keybind({ Text = "Kill sound toggle", Flag = "dw_kbKSound", Default = "M",
+    Callback = function() DW.killSoundOn = not DW.killSoundOn end })
+BindsSec:Keybind({ Text = "Bundle anim toggle", Flag = "dw_kbAnim", Default = "L",
     Callback = function()
         if DW.bundleAnimPlaying then stopBundleAnim()
         elseif DW.bundleAnimId ~= "" then playBundleAnim(DW.bundleAnimId) end
     end })
-BindsSec:Keybind({ Title = "Fly toggle", Value = "F",
+BindsSec:Keybind({ Text = "Fly toggle", Flag = "dw_kbFly", Default = "F",
     Callback = function() if DW.flying then stopFly() else startFly() end end })
-BindsSec:Keybind({ Title = "Noclip toggle", Value = "V",
+BindsSec:Keybind({ Text = "Noclip toggle", Flag = "dw_kbNoclip", Default = "V",
     Callback = function() DW.noclip = not DW.noclip end })
-BindsSec:Keybind({ Title = "Spin bot toggle", Value = "X",
+BindsSec:Keybind({ Text = "Spin bot toggle", Flag = "dw_kbSpin", Default = "X",
     Callback = function() DW.spinOn = not DW.spinOn end })
-BindsSec:Keybind({ Title = "Silent aim toggle", Value = "P",
+BindsSec:Keybind({ Text = "Silent aim toggle", Flag = "dw_kbSilent", Default = "P",
     Callback = function()
         DW.silentAimOn = not DW.silentAimOn
-        notify("Silent aim", DW.silentAimOn and "On" or "Off", 1.5, "Info")
+        notify("Silent aim", DW.silentAimOn and "On" or "Off", 1.5, "accent")
     end })
 
--- ═════════════════════════════ READY ════════════════════════════════
-notify("Dragon Ware", "Loaded. WindUI active. Menu key: 0", 3, "Success")
-return nil
+-- ─────────────── SETTINGS TAB ───────────────
+local SetTab = Window:Tab({ Title = "Settings", Icon = "settings" })
+
+InterfaceManager:SetLibrary(Library)
+InterfaceManager:SetWindow(Window)
+InterfaceManager:SetFolder("DragonWare")
+InterfaceManager:BuildInterfaceSection(SetTab, 1)
+
+ThemeManager:SetLibrary(Library)
+ThemeManager:SetFolder("DragonWare")
+ThemeManager:BuildThemeSection(SetTab, 1)
+
+SaveManager:SetLibrary(Library)
+SaveManager:SetFolder("DragonWare/configs")
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({})
+SaveManager:BuildConfigSection(SetTab, 2)
+
+Library:SetHotkeysVisible(true)
+
+-- ─────────────── Меню по LeftControl ───────────────
+do
+    local applied = false
+
+    pcall(function()
+        local kb = Library.ToggleKeybind
+            or Library.ToggleKey
+            or (Window and Window.ToggleKeybind)
+        if kb and kb.SetValue then
+            kb:SetValue(Enum.KeyCode.LeftControl)
+            applied = true
+        end
+    end)
+
+    if not applied then
+        local menuVisible = true
+        track(UserInputService.InputBegan:Connect(function(input, gp)
+            if gp then return end
+            if input.KeyCode == Enum.KeyCode.LeftControl then
+                menuVisible = not menuVisible
+                pcall(function() Window:SetVisible(menuVisible) end)
+            end
+        end))
+    end
+end
+
+notify("Dragon Ware", "Loaded. Toggle menu: LeftControl", 4, "success")
+
+pcall(function() SaveManager:LoadAutoloadConfig() end)
+
+return Library
