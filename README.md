@@ -1,10 +1,9 @@
 --[[
     Dragon Ware — built on WindUI (Footagesus/WindUI)
-    Features: movement, camera, lighting, MM2 tools, shooting,
+    Features: movement, camera, lighting, MM2 tools, silent aim,
               wallbang, killaura, kill all, kill sounds, auras,
-              kill effects, crosshair, theme presets, anti-fling,
-              FPS booster, auto-trade, bomb jump, bundle animation,
-              mobile buttons, binds.
+              kill effects, crosshair, anti-fling, FPS booster,
+              bomb jump, bundle animation, mobile buttons, binds.
     Only works in MM2.
 ]]
 
@@ -78,8 +77,15 @@ local DW = {
     espObjs = {}, watchedHums = {},
     gunDrop = nil, grabbing = false, autoGrab = false,
 
-    shooting = false, prediction = 0.08, aimPart = "Head",
+    -- Shooting / Silent Aim
+    shooting = false,
+    prediction = 0.08,
+    aimPart = "Head",
     wallbangOn = false,
+    silentAimOn = false,
+    shootRemoteName = "",
+    shootRemote = nil,
+    oldNamecall = nil,
 
     kauraOn = false, kauraDelay = 0, kauraRadius = 12,
     kauraMethod = "Activate", kauraIgnoreSheriff = true,
@@ -129,8 +135,6 @@ local function track(conn)
 end
 
 -- ───────────────────────────── Helpers ──────────────────────────────
-local LOGO = "97594400820219"
-
 local function getChar() return LocalPlayer.Character end
 local function getHum()
     local c = getChar()
@@ -144,13 +148,13 @@ local function guiParent()
     local ok, h = pcall(function() return gethui() end)
     return (ok and h) or CoreGui
 end
-
-local function notify(title, desc, dur)
+local function notify(title, desc, dur, style)
     WindUI:Notify({
         Title = title,
         Content = desc or "",
         Duration = dur or 3,
         Icon = "bell",
+        Style = style or "Info",
     })
 end
 
@@ -163,44 +167,48 @@ local Window = WindUI:CreateWindow({
     Size = UDim2.fromOffset(700, 500),
     Transparent = true,
     Theme = "Dark",
-    User = {
-        Enabled = true,
-        Anonymous = false,
-    },
     SideBarWidth = 180,
-    HasOutline = true,
+    User = { Enabled = true, Anonymous = false },
+    KeyBindMenu = { Title = "Keybinds", DefaultKey = "Zero" },
 })
 
 -- ═════════════════════════════ PLAYER TAB ══════════════════════════
 local PlayerTab = Window:Tab({ Title = "Player", Icon = "user" })
 
-local Movement = PlayerTab:Section({ Title = "Movement" })
+local MovementSec = PlayerTab:Section({ Title = "Movement" })
 
-Movement:Toggle({
-    Title = "Custom walk speed",
-    Value = false,
+MovementSec:Toggle({
+    Title = "Custom walk speed", Value = false,
     Callback = function(v)
         DW.speedOn = v
         if not v then local h = getHum(); if h then h.WalkSpeed = 16 end end
     end,
 })
-Movement:Slider({
-    Title = "Walk speed",
-    Value = { Min = 16, Max = 120, Default = 16 },
+MovementSec:Slider({
+    Title = "Walk speed", Value = { Min = 16, Max = 120, Default = 16 },
     Callback = function(v) DW.speedVal = v end,
 })
-Movement:Toggle({
-    Title = "Custom jump power",
-    Value = false,
+MovementSec:Toggle({
+    Title = "Custom jump power", Value = false,
     Callback = function(v)
         DW.jumpOn = v
         if not v then local h = getHum(); if h then h.UseJumpPower = true; h.JumpPower = 50 end end
     end,
 })
-Movement:Slider({
-    Title = "Jump power",
-    Value = { Min = 50, Max = 250, Default = 50 },
+MovementSec:Slider({
+    Title = "Jump power", Value = { Min = 50, Max = 250, Default = 50 },
     Callback = function(v) DW.jumpVal = v end,
+})
+MovementSec:Slider({
+    Title = "Gravity", Value = { Min = 20, Max = 300, Default = math.floor(DW.defaultGravity) },
+    Callback = function(v) workspace.Gravity = v end,
+})
+MovementSec:Button({
+    Title = "Reset gravity", Icon = "rotate-ccw",
+    Callback = function()
+        workspace.Gravity = DW.defaultGravity
+        notify("Gravity", "Restored.", 2, "Success")
+    end,
 })
 
 track(RunService.Heartbeat:Connect(function()
@@ -210,29 +218,14 @@ track(RunService.Heartbeat:Connect(function()
     if DW.jumpOn then h.UseJumpPower = true; h.JumpPower = DW.jumpVal end
 end))
 
-Movement:Slider({
-    Title = "Gravity",
-    Value = { Min = 20, Max = 300, Default = math.floor(DW.defaultGravity) },
-    Callback = function(v) workspace.Gravity = v end,
-})
-Movement:Button({
-    Title = "Reset gravity",
-    Callback = function()
-        workspace.Gravity = DW.defaultGravity
-        notify("Gravity", "Restored to " .. math.floor(DW.defaultGravity) .. ".", 2)
-    end,
-})
-
 -- Bomb Jump
-local BombSection = PlayerTab:Section({ Title = "Bomb Jump" })
-BombSection:Slider({
-    Title = "Bomb jump power",
-    Value = { Min = 50, Max = 600, Default = 250 },
+local BombSec = PlayerTab:Section({ Title = "Bomb Jump" })
+BombSec:Slider({
+    Title = "Bomb jump power", Value = { Min = 50, Max = 600, Default = 250 },
     Callback = function(v) DW.bombJumpPower = v end,
 })
-BombSection:Slider({
-    Title = "Horizontal boost",
-    Value = { Min = 0, Max = 300, Default = 0 },
+BombSec:Slider({
+    Title = "Horizontal boost", Value = { Min = 0, Max = 300, Default = 0 },
     Callback = function(v) DW.bombJumpHorizontal = v end,
 })
 
@@ -247,10 +240,9 @@ local function bombJump()
     root.AssemblyLinearVelocity = Vector3.new(forward.X, DW.bombJumpPower, forward.Z)
 end
 
-BombSection:Button({ Title = "Launch now", Callback = bombJump })
-BombSection:Toggle({
-    Title = "Auto bomb jump (Space)",
-    Value = false,
+BombSec:Button({ Title = "Launch now", Icon = "rocket", Callback = bombJump })
+BombSec:Toggle({
+    Title = "Auto bomb jump (Space)", Value = false,
     Callback = function(v) DW.bombJumpAuto = v end,
 })
 track(UserInputService.JumpRequest:Connect(function()
@@ -258,22 +250,21 @@ track(UserInputService.JumpRequest:Connect(function()
     bombJump()
 end))
 
--- Speed glitch
-local GlitchSection = PlayerTab:Section({ Title = "Speed Glitch" })
-GlitchSection:Toggle({
+-- Speed Glitch
+local GlitchSec = PlayerTab:Section({ Title = "Speed Glitch" })
+GlitchSec:Toggle({
     Title = "Enable", Value = false,
     Callback = function(v) DW.glitchOn = v end,
 })
-GlitchSection:Slider({
-    Title = "Jump speed",
-    Value = { Min = 16, Max = 300, Default = 60 },
+GlitchSec:Slider({
+    Title = "Jump speed", Value = { Min = 16, Max = 300, Default = 60 },
     Callback = function(v) DW.glitchSpeed = v end,
 })
-GlitchSection:Dropdown({
+GlitchSec:Dropdown({
     Title = "Mode", Values = { "Jump", "Always" }, Value = "Jump",
     Callback = function(v) DW.glitchMode = v end,
 })
-GlitchSection:Dropdown({
+GlitchSec:Dropdown({
     Title = "Method", Values = { "Velocity", "CFrame" }, Value = "Velocity",
     Callback = function(v) DW.glitchMethod = v end,
 })
@@ -296,9 +287,9 @@ track(RunService.Heartbeat:Connect(function(dt)
 end))
 
 -- Abilities
-local Abilities = PlayerTab:Section({ Title = "Abilities" })
+local AbilSec = PlayerTab:Section({ Title = "Abilities" })
 
-Abilities:Toggle({
+AbilSec:Toggle({
     Title = "Infinite jump", Value = false,
     Callback = function(v) DW.infJump = v end,
 })
@@ -308,7 +299,7 @@ track(UserInputService.JumpRequest:Connect(function()
     if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
 end))
 
-Abilities:Toggle({
+AbilSec:Toggle({
     Title = "Noclip", Value = false,
     Callback = function(v) DW.noclip = v end,
 })
@@ -321,16 +312,15 @@ track(RunService.Stepped:Connect(function()
     end
 end))
 
-Abilities:Toggle({
+AbilSec:Toggle({
     Title = "Spin bot", Value = false,
     Callback = function(v) DW.spinOn = v end,
 })
-Abilities:Slider({
-    Title = "Spin speed",
-    Value = { Min = 200, Max = 8000, Default = 2200 },
+AbilSec:Slider({
+    Title = "Spin speed", Value = { Min = 200, Max = 8000, Default = 2200 },
     Callback = function(v) DW.spinSpeed = v end,
 })
-Abilities:Dropdown({
+AbilSec:Dropdown({
     Title = "Spin axis", Values = { "Y", "XY", "XYZ" }, Value = "Y",
     Callback = function(v) DW.spinAxis = v end,
 })
@@ -350,7 +340,6 @@ local function stopFly()
     if DW.flyBG then DW.flyBG:Destroy(); DW.flyBG = nil end
     local h = getHum(); if h then h.PlatformStand = false end
 end
-
 local function startFly()
     local root, hum = getRoot(), getHum()
     if not root or not hum then return end
@@ -367,13 +356,12 @@ local function startFly()
     DW.flyBG.Parent = root
 end
 
-Abilities:Toggle({
+AbilSec:Toggle({
     Title = "Fly", Value = false,
     Callback = function(v) if v then startFly() else stopFly() end end,
 })
-Abilities:Slider({
-    Title = "Fly speed",
-    Value = { Min = 10, Max = 250, Default = 60 },
+AbilSec:Slider({
+    Title = "Fly speed", Value = { Min = 10, Max = 250, Default = 60 },
     Callback = function(v) DW.flySpeed = v end,
 })
 
@@ -392,8 +380,15 @@ track(RunService.RenderStepped:Connect(function()
     DW.flyBG.CFrame = cam.CFrame
 end))
 
+track(LocalPlayer.CharacterAdded:Connect(function()
+    if DW.flying then
+        DW.flyBV, DW.flyBG = nil, nil
+        task.wait(0.5); startFly()
+    end
+end))
+
 -- Bundle Animation
-local AnimSection = PlayerTab:Section({ Title = "Bundle Animation" })
+local AnimSec = PlayerTab:Section({ Title = "Bundle Animation" })
 
 local animPresets = {
     None          = "",
@@ -403,7 +398,6 @@ local animPresets = {
     Robot         = "rbxassetid://6495505137",
     DefaultIdle   = "rbxassetid://507766666",
 }
-
 local function stopBundleAnim()
     if DW.bundleAnimTrack then
         pcall(function() DW.bundleAnimTrack:Stop() end)
@@ -411,7 +405,6 @@ local function stopBundleAnim()
     end
     DW.bundleAnimPlaying = false
 end
-
 local function playBundleAnim(id)
     stopBundleAnim()
     if not id or id == "" then return end
@@ -423,17 +416,17 @@ local function playBundleAnim(id)
     end
     local anim = Instance.new("Animation")
     anim.AnimationId = id
-    local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
-    if ok and track then
-        track.Looped = true
-        track.Priority = Enum.AnimationPriority.Action
-        track:Play()
-        DW.bundleAnimTrack = track
+    local ok, tr = pcall(function() return animator:LoadAnimation(anim) end)
+    if ok and tr then
+        tr.Looped = true
+        tr.Priority = Enum.AnimationPriority.Action
+        tr:Play()
+        DW.bundleAnimTrack = tr
         DW.bundleAnimPlaying = true
     end
 end
 
-AnimSection:Dropdown({
+AnimSec:Dropdown({
     Title = "Preset",
     Values = { "None", "GangnamStyle", "Floss", "OrangeJustice", "Robot", "DefaultIdle" },
     Value = "None",
@@ -443,9 +436,8 @@ AnimSection:Dropdown({
         if id == "" then stopBundleAnim() else playBundleAnim(id) end
     end,
 })
-AnimSection:Input({
-    Title = "Custom animation ID",
-    Value = "",
+AnimSec:Input({
+    Title = "Custom animation ID", Value = "",
     Placeholder = "rbxassetid://...",
     Callback = function(s)
         if s == "" then return end
@@ -454,14 +446,14 @@ AnimSection:Input({
         playBundleAnim(s)
     end,
 })
-AnimSection:Button({
-    Title = "Play animation",
+AnimSec:Button({
+    Title = "Play animation", Icon = "play",
     Callback = function()
-        if DW.bundleAnimId == "" then notify("Bundle Animation", "ID пустой.", 2); return end
+        if DW.bundleAnimId == "" then notify("Bundle Animation", "ID пустой.", 2, "Warning"); return end
         playBundleAnim(DW.bundleAnimId)
     end,
 })
-AnimSection:Button({ Title = "Stop animation", Callback = stopBundleAnim })
+AnimSec:Button({ Title = "Stop animation", Icon = "square", Callback = stopBundleAnim })
 track(LocalPlayer.CharacterAdded:Connect(function()
     stopBundleAnim()
     if DW.bundleAnimId ~= "" then
@@ -472,29 +464,28 @@ end))
 -- ═════════════════════════════ WORLD TAB ═══════════════════════════
 local WorldTab = Window:Tab({ Title = "World", Icon = "globe" })
 
-local CamSection = WorldTab:Section({ Title = "Camera" })
-CamSection:Toggle({
+local CamSec = WorldTab:Section({ Title = "Camera" })
+CamSec:Toggle({
     Title = "Custom FOV", Value = false,
     Callback = function(v)
         DW.fovOn = v
         if not v then workspace.CurrentCamera.FieldOfView = DW.defaultFOV end
     end,
 })
-CamSection:Slider({
-    Title = "Field of view",
-    Value = { Min = 30, Max = 120, Default = 70 },
+CamSec:Slider({
+    Title = "Field of view", Value = { Min = 30, Max = 120, Default = 70 },
     Callback = function(v) DW.fovVal = v end,
 })
 track(RunService.RenderStepped:Connect(function()
     if DW.fovOn then workspace.CurrentCamera.FieldOfView = DW.fovVal end
 end))
-CamSection:Dropdown({
+CamSec:Dropdown({
     Title = "Camera mode", Values = { "Classic", "LockFirstPerson" }, Value = "Classic",
     Callback = function(v) pcall(function() LocalPlayer.CameraMode = Enum.CameraMode[v] end) end,
 })
 
-local LightSection = WorldTab:Section({ Title = "Lighting" })
-LightSection:Toggle({
+local LightSec = WorldTab:Section({ Title = "Lighting" })
+LightSec:Toggle({
     Title = "Fullbright", Value = false,
     Callback = function(v)
         DW.fullbright = v
@@ -511,21 +502,19 @@ track(RunService.RenderStepped:Connect(function()
     Lighting.FogEnd = 1e6; Lighting.GlobalShadows = false
     Lighting.Ambient = Color3.fromRGB(178, 178, 178)
 end))
-LightSection:Slider({
-    Title = "Time of day",
-    Value = { Min = 0, Max = 24, Default = math.floor(Lighting.ClockTime) },
+LightSec:Slider({
+    Title = "Time of day", Value = { Min = 0, Max = 24, Default = math.floor(Lighting.ClockTime) },
     Callback = function(v) if not DW.fullbright then Lighting.ClockTime = v end end,
 })
-LightSection:Colorpicker({
-    Title = "Ambient tint",
-    Default = Lighting.Ambient,
+LightSec:Colorpicker({
+    Title = "Ambient tint", Default = Lighting.Ambient,
     Callback = function(c) if not DW.fullbright then Lighting.Ambient = c end end,
 })
 
 -- ═════════════════════════════ VISUAL TAB ══════════════════════════
 local VisualTab = Window:Tab({ Title = "Visual", Icon = "sparkles" })
 
-local AuraSection = VisualTab:Section({ Title = "Auras" })
+local AuraSec = VisualTab:Section({ Title = "Auras" })
 
 local auraFolder = Instance.new("Folder")
 auraFolder.Name = "DragonWareAuras"
@@ -619,22 +608,21 @@ task.spawn(function()
 end)
 track(Players.PlayerRemoving:Connect(cleanupAura))
 
-AuraSection:Toggle({
+AuraSec:Toggle({
     Title = "Enable auras", Value = false,
     Callback = function(v) DW.auraOn = v end,
 })
 
 local auraPresets = {
-    Default = { color = Color3.fromRGB(179, 165, 255), size = 4, speed = 3, transparency = 0.5, rainbow = false },
-    Demon   = { color = Color3.fromRGB(255, 40, 40),   size = 5, speed = 5, transparency = 0.3, rainbow = false },
-    Angel   = { color = Color3.fromRGB(255, 255, 255), size = 6, speed = 2, transparency = 0.4, rainbow = false },
-    Galaxy  = { color = Color3.fromRGB(150, 100, 255), size = 7, speed = 4, transparency = 0.5, rainbow = true  },
-    Fire    = { color = Color3.fromRGB(255, 120, 0),   size = 5, speed = 6, transparency = 0.3, rainbow = false },
-    Toxic   = { color = Color3.fromRGB(120, 255, 0),   size = 4, speed = 4, transparency = 0.4, rainbow = false },
-    Ice     = { color = Color3.fromRGB(100, 220, 255), size = 5, speed = 2, transparency = 0.4, rainbow = false },
+    Default = { color = Color3.fromRGB(179,165,255), size = 4, speed = 3, transparency = 0.5, rainbow = false },
+    Demon   = { color = Color3.fromRGB(255,40,40),   size = 5, speed = 5, transparency = 0.3, rainbow = false },
+    Angel   = { color = Color3.fromRGB(255,255,255), size = 6, speed = 2, transparency = 0.4, rainbow = false },
+    Galaxy  = { color = Color3.fromRGB(150,100,255), size = 7, speed = 4, transparency = 0.5, rainbow = true  },
+    Fire    = { color = Color3.fromRGB(255,120,0),   size = 5, speed = 6, transparency = 0.3, rainbow = false },
+    Toxic   = { color = Color3.fromRGB(120,255,0),   size = 4, speed = 4, transparency = 0.4, rainbow = false },
+    Ice     = { color = Color3.fromRGB(100,220,255), size = 5, speed = 2, transparency = 0.4, rainbow = false },
 }
-
-AuraSection:Dropdown({
+AuraSec:Dropdown({
     Title = "Aura preset",
     Values = { "Default", "Demon", "Angel", "Galaxy", "Fire", "Toxic", "Ice" },
     Value = "Default",
@@ -645,45 +633,27 @@ AuraSection:Dropdown({
         DW.auraRainbow = p.rainbow
     end,
 })
-AuraSection:Colorpicker({
+AuraSec:Colorpicker({
     Title = "Aura color", Default = DW.auraColor,
     Callback = function(c) DW.auraColor = c end,
 })
-AuraSection:Slider({
-    Title = "Aura size",
-    Value = { Min = 2, Max = 20, Default = 4 },
-    Callback = function(v) DW.auraSize = v end,
-})
-AuraSection:Slider({
-    Title = "Transparency",
-    Value = { Min = 0, Max = 1, Default = 0.5 },
-    Callback = function(v) DW.auraTransparency = v end,
-})
-AuraSection:Toggle({
-    Title = "Rainbow aura", Value = false,
-    Callback = function(v) DW.auraRainbow = v end,
-})
-AuraSection:Toggle({
-    Title = "Spin ring", Value = true,
-    Callback = function(v) DW.auraSpin = v end,
-})
-AuraSection:Slider({
-    Title = "Spin speed",
-    Value = { Min = 1, Max = 20, Default = 3 },
-    Callback = function(v) DW.auraSpeed = v end,
-})
-AuraSection:Toggle({
-    Title = "Particles", Value = true,
-    Callback = function(v) DW.auraParticles = v end,
-})
-AuraSection:Toggle({
-    Title = "Point light", Value = true,
-    Callback = function(v) DW.auraLight = v end,
-})
+AuraSec:Slider({ Title = "Aura size", Value = { Min = 2, Max = 20, Default = 4 },
+    Callback = function(v) DW.auraSize = v end })
+AuraSec:Slider({ Title = "Transparency", Value = { Min = 0, Max = 1, Default = 0.5 },
+    Callback = function(v) DW.auraTransparency = v end })
+AuraSec:Toggle({ Title = "Rainbow aura", Value = false,
+    Callback = function(v) DW.auraRainbow = v end })
+AuraSec:Toggle({ Title = "Spin ring", Value = true,
+    Callback = function(v) DW.auraSpin = v end })
+AuraSec:Slider({ Title = "Spin speed", Value = { Min = 1, Max = 20, Default = 3 },
+    Callback = function(v) DW.auraSpeed = v end })
+AuraSec:Toggle({ Title = "Particles", Value = true,
+    Callback = function(v) DW.auraParticles = v end })
+AuraSec:Toggle({ Title = "Point light", Value = true,
+    Callback = function(v) DW.auraLight = v end })
 
 -- Kill Effect
-local KillFxSection = VisualTab:Section({ Title = "Kill Effect" })
-
+local KillFxSec = VisualTab:Section({ Title = "Kill Effect" })
 local killFxFolder = Instance.new("Folder")
 killFxFolder.Name = "DragonWareKillFX"
 killFxFolder.Parent = guiParent()
@@ -725,31 +695,20 @@ local function spawnKillEffect(position)
     end
 end
 
-KillFxSection:Toggle({
-    Title = "Enable kill effect", Value = false,
-    Callback = function(v) DW.killFxOn = v end,
-})
-KillFxSection:Dropdown({
-    Title = "Effect type", Values = { "Explosion", "Sparkles", "Fire" }, Value = "Explosion",
-    Callback = function(v) DW.killFxType = v end,
-})
-KillFxSection:Colorpicker({
-    Title = "Effect color", Default = DW.killFxColor,
-    Callback = function(c) DW.killFxColor = c end,
-})
-KillFxSection:Slider({
-    Title = "Effect size",
-    Value = { Min = 2, Max = 20, Default = 8 },
-    Callback = function(v) DW.killFxSize = v end,
-})
-KillFxSection:Toggle({
-    Title = "Rainbow effect", Value = false,
-    Callback = function(v) DW.killFxRainbow = v end,
-})
+KillFxSec:Toggle({ Title = "Enable kill effect", Value = false,
+    Callback = function(v) DW.killFxOn = v end })
+KillFxSec:Dropdown({ Title = "Effect type",
+    Values = { "Explosion", "Sparkles", "Fire" }, Value = "Explosion",
+    Callback = function(v) DW.killFxType = v end })
+KillFxSec:Colorpicker({ Title = "Effect color", Default = DW.killFxColor,
+    Callback = function(c) DW.killFxColor = c end })
+KillFxSec:Slider({ Title = "Effect size", Value = { Min = 2, Max = 20, Default = 8 },
+    Callback = function(v) DW.killFxSize = v end })
+KillFxSec:Toggle({ Title = "Rainbow effect", Value = false,
+    Callback = function(v) DW.killFxRainbow = v end })
 
 -- Crosshair
-local CrossSection = VisualTab:Section({ Title = "Crosshair" })
-
+local CrossSec = VisualTab:Section({ Title = "Crosshair" })
 local crossGui = Instance.new("ScreenGui")
 crossGui.Name = "DragonWareCrosshair"; crossGui.ResetOnSpawn = false
 crossGui.IgnoreGuiInset = true; crossGui.DisplayOrder = 95
@@ -808,55 +767,24 @@ local function rebuildCrosshair()
     end
 end
 
-CrossSection:Toggle({
-    Title = "Enable crosshair", Value = false,
-    Callback = function(v) DW.crossOn = v; rebuildCrosshair() end,
-})
-CrossSection:Dropdown({
-    Title = "Style", Values = { "Dot", "Cross", "Circle", "Cross+Dot" }, Value = "Cross",
-    Callback = function(v) DW.crossStyle = v; rebuildCrosshair() end,
-})
-CrossSection:Colorpicker({
-    Title = "Color", Default = DW.crossColor,
-    Callback = function(c) DW.crossColor = c; rebuildCrosshair() end,
-})
-CrossSection:Slider({
-    Title = "Size",
-    Value = { Min = 4, Max = 40, Default = 12 },
-    Callback = function(v) DW.crossSize = v; rebuildCrosshair() end,
-})
-CrossSection:Slider({
-    Title = "Thickness",
-    Value = { Min = 1, Max = 6, Default = 2 },
-    Callback = function(v) DW.crossThickness = v; rebuildCrosshair() end,
-})
-CrossSection:Slider({
-    Title = "Gap",
-    Value = { Min = 0, Max = 20, Default = 4 },
-    Callback = function(v) DW.crossGap = v; rebuildCrosshair() end,
-})
-CrossSection:Toggle({
-    Title = "Outline", Value = true,
-    Callback = function(v) DW.crossOutline = v; rebuildCrosshair() end,
-})
+CrossSec:Toggle({ Title = "Enable crosshair", Value = false,
+    Callback = function(v) DW.crossOn = v; rebuildCrosshair() end })
+CrossSec:Dropdown({ Title = "Style",
+    Values = { "Dot", "Cross", "Circle", "Cross+Dot" }, Value = "Cross",
+    Callback = function(v) DW.crossStyle = v; rebuildCrosshair() end })
+CrossSec:Colorpicker({ Title = "Crosshair color", Default = DW.crossColor,
+    Callback = function(c) DW.crossColor = c; rebuildCrosshair() end })
+CrossSec:Slider({ Title = "Size", Value = { Min = 4, Max = 40, Default = 12 },
+    Callback = function(v) DW.crossSize = v; rebuildCrosshair() end })
+CrossSec:Slider({ Title = "Thickness", Value = { Min = 1, Max = 6, Default = 2 },
+    Callback = function(v) DW.crossThickness = v; rebuildCrosshair() end })
+CrossSec:Slider({ Title = "Gap", Value = { Min = 0, Max = 20, Default = 4 },
+    Callback = function(v) DW.crossGap = v; rebuildCrosshair() end })
+CrossSec:Toggle({ Title = "Outline", Value = true,
+    Callback = function(v) DW.crossOutline = v; rebuildCrosshair() end })
 
 -- ═════════════════════════════ MM2 TAB ═════════════════════════════
 local MM2Tab = Window:Tab({ Title = "MM2", Icon = "sword" })
-
-local ESPSection = MM2Tab:Section({ Title = "ESP Roles" })
-
-local espFolder = Instance.new("Folder")
-espFolder.Name = "DragonWareESP"; espFolder.Parent = guiParent()
-table.insert(Cleanups, function()
-    for plr in pairs(DW.espObjs) do
-        local o = DW.espObjs[plr]
-        if o then
-            pcall(function() o.hl:Destroy() end)
-            pcall(function() o.bb:Destroy() end)
-        end
-    end
-    espFolder:Destroy()
-end)
 
 local function refreshRoles()
     if DW.fetching then return end
@@ -899,6 +827,22 @@ local function getSheriff()
         if plr ~= LocalPlayer and getRole(plr) == "Sheriff" then return plr end
     end
 end
+
+-- ESP
+local ESPSec = MM2Tab:Section({ Title = "ESP Roles" })
+
+local espFolder = Instance.new("Folder")
+espFolder.Name = "DragonWareESP"; espFolder.Parent = guiParent()
+table.insert(Cleanups, function()
+    for plr in pairs(DW.espObjs) do
+        local o = DW.espObjs[plr]
+        if o then
+            pcall(function() o.hl:Destroy() end)
+            pcall(function() o.bb:Destroy() end)
+        end
+    end
+    espFolder:Destroy()
+end)
 
 local function clearESP(plr)
     local o = DW.espObjs[plr]
@@ -959,37 +903,23 @@ task.spawn(function()
     end
 end)
 
-ESPSection:Toggle({
-    Title = "Murderer ESP", Value = false,
-    Callback = function(v) DW.roleOn.Murderer = v end,
-})
-ESPSection:Colorpicker({
-    Title = "Murderer color", Default = DW.roleColor.Murderer,
-    Callback = function(c) DW.roleColor.Murderer = c end,
-})
-ESPSection:Toggle({
-    Title = "Sheriff ESP", Value = false,
-    Callback = function(v) DW.roleOn.Sheriff = v end,
-})
-ESPSection:Colorpicker({
-    Title = "Sheriff color", Default = DW.roleColor.Sheriff,
-    Callback = function(c) DW.roleColor.Sheriff = c end,
-})
-ESPSection:Toggle({
-    Title = "Innocent ESP", Value = false,
-    Callback = function(v) DW.roleOn.Innocent = v end,
-})
-ESPSection:Colorpicker({
-    Title = "Innocent color", Default = DW.roleColor.Innocent,
-    Callback = function(c) DW.roleColor.Innocent = c end,
-})
-ESPSection:Toggle({
-    Title = "Show names", Value = true,
-    Callback = function(v) DW.showNames = v end,
-})
+ESPSec:Toggle({ Title = "Murderer ESP", Value = false,
+    Callback = function(v) DW.roleOn.Murderer = v end })
+ESPSec:Colorpicker({ Title = "Murderer color", Default = DW.roleColor.Murderer,
+    Callback = function(c) DW.roleColor.Murderer = c end })
+ESPSec:Toggle({ Title = "Sheriff ESP", Value = false,
+    Callback = function(v) DW.roleOn.Sheriff = v end })
+ESPSec:Colorpicker({ Title = "Sheriff color", Default = DW.roleColor.Sheriff,
+    Callback = function(c) DW.roleColor.Sheriff = c end })
+ESPSec:Toggle({ Title = "Innocent ESP", Value = false,
+    Callback = function(v) DW.roleOn.Innocent = v end })
+ESPSec:Colorpicker({ Title = "Innocent color", Default = DW.roleColor.Innocent,
+    Callback = function(c) DW.roleColor.Innocent = c end })
+ESPSec:Toggle({ Title = "Show names", Value = true,
+    Callback = function(v) DW.showNames = v end })
 
 -- Gun
-local GunSection = MM2Tab:Section({ Title = "Gun" })
+local GunSec = MM2Tab:Section({ Title = "Gun" })
 
 DW.gunDrop = workspace:FindFirstChild("GunDrop", true)
 track(workspace.DescendantAdded:Connect(function(d)
@@ -1009,7 +939,7 @@ local function grabGun(silent)
     if DW.grabbing then return end
     local root, part = getRoot(), getGunPart()
     if not root or not part then
-        if not silent then notify("Grab gun", "No dropped gun on the map.", 2) end
+        if not silent then notify("Grab gun", "No dropped gun on the map.", 2, "Warning") end
         return
     end
     if hasTool(LocalPlayer, "Gun") or hasTool(LocalPlayer, "Knife") then return end
@@ -1028,19 +958,15 @@ local function grabGun(silent)
         end
     end
     if not silent then
-        notify("Grab gun", hasTool(LocalPlayer, "Gun") and "Got the gun." or "Tried.", 2)
+        notify("Grab gun", hasTool(LocalPlayer, "Gun") and "Got the gun." or "Tried.", 2, "Success")
     end
     DW.grabbing = false
 end
 
-GunSection:Toggle({
-    Title = "Auto grab gun", Value = false,
-    Callback = function(v) DW.autoGrab = v end,
-})
-GunSection:Button({
-    Title = "Grab gun now",
-    Callback = function() grabGun(false) end,
-})
+GunSec:Toggle({ Title = "Auto grab gun", Value = false,
+    Callback = function(v) DW.autoGrab = v end })
+GunSec:Button({ Title = "Grab gun now", Icon = "hand",
+    Callback = function() grabGun(false) end })
 task.spawn(function()
     while DW.mm2Running do
         if DW.autoGrab then pcall(grabGun, true) end
@@ -1048,22 +974,86 @@ task.spawn(function()
     end
 end)
 
--- Shoot
-local ShootSection = MM2Tab:Section({ Title = "Shoot Murderer" })
+-- ═════════ Shoot murderer + Silent Aim ═════════
+local ShootSec = MM2Tab:Section({ Title = "Shoot Murderer" })
 
+-- Автопоиск shoot-remote'а
+local function findShootRemote()
+    local candidates = {}
+    for _, obj in ipairs(RS:GetDescendants()) do
+        if obj:IsA("RemoteEvent") then
+            local n = obj.Name:lower()
+            if n == "shoot" or n == "fireserver" or n == "fire"
+               or n == "requestshoot" or n:find("shoot") then
+                table.insert(candidates, obj)
+            end
+        end
+    end
+    if DW.shootRemoteName ~= "" then
+        for _, c in ipairs(candidates) do
+            if c.Name == DW.shootRemoteName then return c end
+        end
+    end
+    return candidates[1]
+end
+DW.shootRemote = findShootRemote()
+
+-- Хук __namecall для silent aim
+if hookmetamethod and newcclosure and checkcaller then
+    DW.oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "FireServer" and not checkcaller() then
+            if self == DW.shootRemote
+               or (DW.silentAimOn and self.Name and self.Name:lower():find("shoot")) then
+                local args = {...}
+                local target = getMurderer()
+
+                if target and target.Character then
+                    local tPart = target.Character:FindFirstChild(DW.aimPart)
+                        or target.Character:FindFirstChild("Head")
+                        or target.Character:FindFirstChild("HumanoidRootPart")
+                    local myRoot = getRoot()
+
+                    if tPart and myRoot then
+                        local aimPos = tPart.Position
+                            + (tPart.AssemblyLinearVelocity * DW.prediction)
+                        local dir = (aimPos - myRoot.Position).Unit
+
+                        for i, arg in ipairs(args) do
+                            if typeof(arg) == "Vector3" then
+                                if (arg - myRoot.Position).Magnitude < 5 then
+                                    args[i] = myRoot.Position
+                                else
+                                    args[i] = dir * 1000
+                                end
+                            elseif typeof(arg) == "CFrame" then
+                                args[i] = CFrame.lookAt(myRoot.Position, aimPos)
+                            end
+                        end
+                        return DW.oldNamecall(self, table.unpack(args))
+                    end
+                end
+            end
+        end
+        return DW.oldNamecall(self, ...)
+    end))
+end
+
+-- Основная функция
 local function shootMurderer()
     if DW.shooting then return end
     local gun = hasTool(LocalPlayer, "Gun")
-    if not gun then notify("Shoot murderer", "You don't have the gun.", 2); return end
+    if not gun then notify("Shoot murderer", "You don't have the gun.", 2, "Warning"); return end
     refreshRoles()
     local murd = getMurderer()
     local mChar = murd and murd.Character
     local mRoot = mChar and mChar:FindFirstChild("HumanoidRootPart")
     local mHum  = mChar and mChar:FindFirstChildOfClass("Humanoid")
     if not mRoot or not mHum or mHum.Health <= 0 then
-        notify("Shoot murderer", "Murderer not found.", 2); return
+        notify("Shoot murderer", "Murderer not found.", 2, "Warning"); return
     end
 
+    -- Wallbang через телепорт
     if DW.wallbangOn then
         local root, hum = getRoot(), getHum()
         if not root or not hum then return end
@@ -1078,16 +1068,27 @@ local function shootMurderer()
         task.wait(0.05)
         root.CFrame = origin
         DW.noclip = prevNoclip
-        notify("Shoot murderer", "Wallbang at " .. murd.DisplayName, 2)
+        notify("Shoot murderer", "Wallbang at " .. murd.DisplayName, 2, "Success")
         return
     end
 
     DW.shooting = true
+
+    -- Экипируем пистолет
     local hum = getHum()
     if hum and gun.Parent ~= getChar() then
-        hum:EquipTool(gun); task.wait(0.15)
+        hum:EquipTool(gun); task.wait(0.08)
     end
 
+    -- SILENT AIM: камера не двигается, хук подменит аргументы
+    if DW.silentAimOn then
+        pcall(function() gun:Activate() end)
+        task.wait(0.35)
+        DW.shooting = false
+        return
+    end
+
+    -- Обычный аим (камера двигается)
     local tPart = mChar:FindFirstChild(DW.aimPart) or mRoot
     local aimPos = tPart.Position + tPart.AssemblyLinearVelocity * DW.prediction
     local cam = workspace.CurrentCamera
@@ -1104,41 +1105,75 @@ local function shootMurderer()
     DW.shooting = false
 end
 
-ShootSection:Button({ Title = "Shoot murderer", Callback = shootMurderer })
-ShootSection:Slider({
-    Title = "Aim part (1=Head, 2=HRP, 3=Torso)",
+-- UI Shoot
+ShootSec:Button({ Title = "Shoot murderer", Icon = "target", Callback = shootMurderer })
+
+ShootSec:Toggle({
+    Title = "Silent aim", Value = false,
+    Tooltip = "Не двигает камеру — подменяет направление на сервере",
+    Callback = function(v)
+        DW.silentAimOn = v
+        if v and not DW.oldNamecall then
+            notify("Silent aim", "Hook недоступен. Работает как обычный аим.", 4, "Warning")
+        end
+    end,
+})
+
+ShootSec:Slider({ Title = "Aim part (1=Head 2=HRP 3=Torso)",
     Value = { Min = 1, Max = 3, Default = 1 },
     Callback = function(v)
         local i = math.floor(v + 0.5)
         DW.aimPart = i == 1 and "Head" or i == 2 and "HumanoidRootPart" or "UpperTorso"
+    end })
+
+ShootSec:Slider({ Title = "Lead prediction",
+    Value = { Min = 0, Max = 0.4, Default = 0.08 },
+    Callback = function(v) DW.prediction = v end })
+
+ShootSec:Toggle({ Title = "Wallbang (teleport)", Value = false,
+    Callback = function(v) DW.wallbangOn = v end })
+
+ShootSec:Divider()
+
+ShootSec:Label("Remote: " .. (DW.shootRemote and DW.shootRemote:GetFullName() or "(не найден)"))
+
+ShootSec:Input({
+    Title = "Manual remote name", Value = "",
+    Placeholder = "напр. Shoot / FireServer",
+    Callback = function(s)
+        DW.shootRemoteName = s
+        DW.shootRemote = findShootRemote()
+        notify("Remote", DW.shootRemote and ("Found: " .. DW.shootRemote:GetFullName()) or "Не найден", 3,
+            DW.shootRemote and "Success" or "Warning")
     end,
 })
-ShootSection:Slider({
-    Title = "Lead prediction",
-    Value = { Min = 0, Max = 0.4, Default = 0.08 },
-    Callback = function(v) DW.prediction = v end,
+
+ShootSec:Button({
+    Title = "Rescan shoot remote", Icon = "refresh-cw",
+    Callback = function()
+        DW.shootRemote = findShootRemote()
+        notify("Remote", DW.shootRemote and ("Found: " .. DW.shootRemote:GetFullName()) or "Не найдено", 3,
+            DW.shootRemote and "Success" or "Warning")
+    end,
 })
-ShootSection:Toggle({
-    Title = "Wallbang (teleport)", Value = false,
-    Callback = function(v) DW.wallbangOn = v end,
-})
-ShootSection:Button({
-    Title = "Who is the murderer?",
+
+ShootSec:Button({
+    Title = "Who is the murderer?", Icon = "search",
     Callback = function()
         refreshRoles(); task.wait(0.3)
         local m = getMurderer()
-        notify("Murderer", m and m.DisplayName or "Not detected.", 3)
+        notify("Murderer", m and m.DisplayName or "Not detected.", 3, "Info")
     end,
 })
 
 -- Kill All
-local KillAllSection = MM2Tab:Section({ Title = "Kill All" })
+local KillAllSec = MM2Tab:Section({ Title = "Kill All" })
 
 local function killAll()
     local knife = hasTool(LocalPlayer, "Knife")
     local gun = hasTool(LocalPlayer, "Gun")
     if not knife and not gun then
-        notify("Kill All", "У тебя нет оружия.", 2); return
+        notify("Kill All", "У тебя нет оружия.", 2, "Warning"); return
     end
     refreshRoles()
     local myRoot = getRoot(); if not myRoot then return end
@@ -1177,21 +1212,13 @@ local function killAll()
     end
 end
 
-KillAllSection:Button({ Title = "Kill all now", Callback = killAll })
-KillAllSection:Slider({
-    Title = "Range",
-    Value = { Min = 50, Max = 2000, Default = 500 },
-    Callback = function(v) DW.killAllRange = v end,
-})
-KillAllSection:Slider({
-    Title = "Interval",
-    Value = { Min = 0.1, Max = 5, Default = 0.5 },
-    Callback = function(v) DW.killAllInterval = v end,
-})
-KillAllSection:Toggle({
-    Title = "Auto kill all", Value = false,
-    Callback = function(v) DW.killAllOn = v end,
-})
+KillAllSec:Button({ Title = "Kill all now", Icon = "skull", Callback = killAll })
+KillAllSec:Slider({ Title = "Range", Value = { Min = 50, Max = 2000, Default = 500 },
+    Callback = function(v) DW.killAllRange = v end })
+KillAllSec:Slider({ Title = "Interval", Value = { Min = 0.1, Max = 5, Default = 0.5 },
+    Callback = function(v) DW.killAllInterval = v end })
+KillAllSec:Toggle({ Title = "Auto kill all", Value = false,
+    Callback = function(v) DW.killAllOn = v end })
 task.spawn(function()
     while DW.mm2Running do
         if DW.killAllOn and os.clock() - DW.killAllLast >= DW.killAllInterval then
@@ -1203,7 +1230,7 @@ task.spawn(function()
 end)
 
 -- Killaura
-local KauraSection = MM2Tab:Section({ Title = "Killaura" })
+local KauraSec = MM2Tab:Section({ Title = "Killaura" })
 
 local function findKauraTarget()
     local root = getRoot(); if not root then return nil end
@@ -1264,59 +1291,45 @@ task.spawn(function()
     end
 end)
 
-KauraSection:Slider({
-    Title = "Killaura speed (0 = off)",
+KauraSec:Slider({ Title = "Killaura speed (0 = off)",
     Value = { Min = 0, Max = 3, Default = 0 },
     Callback = function(v)
         if v <= 0 then DW.kauraOn = false; DW.kauraDelay = 0
         else DW.kauraOn = true; DW.kauraDelay = v end
-    end,
-})
-KauraSection:Slider({
-    Title = "Radius",
-    Value = { Min = 3, Max = 50, Default = 12 },
-    Callback = function(v) DW.kauraRadius = v end,
-})
-KauraSection:Dropdown({
-    Title = "Method", Values = { "Activate", "Teleport" }, Value = "Activate",
-    Callback = function(v) DW.kauraMethod = v end,
-})
-KauraSection:Dropdown({
-    Title = "Target priority", Values = { "Nearest", "LowestHP" }, Value = "Nearest",
-    Callback = function(v) DW.kauraTarget = v end,
-})
-KauraSection:Toggle({
-    Title = "Ignore Sheriff", Value = true,
-    Callback = function(v) DW.kauraIgnoreSheriff = v end,
-})
+    end })
+KauraSec:Slider({ Title = "Radius", Value = { Min = 3, Max = 50, Default = 12 },
+    Callback = function(v) DW.kauraRadius = v end })
+KauraSec:Dropdown({ Title = "Method",
+    Values = { "Activate", "Teleport" }, Value = "Activate",
+    Callback = function(v) DW.kauraMethod = v end })
+KauraSec:Dropdown({ Title = "Target priority",
+    Values = { "Nearest", "LowestHP" }, Value = "Nearest",
+    Callback = function(v) DW.kauraTarget = v end })
+KauraSec:Toggle({ Title = "Ignore Sheriff", Value = true,
+    Callback = function(v) DW.kauraIgnoreSheriff = v end })
 
 -- Fling
-local FlingSection = MM2Tab:Section({ Title = "Fling" })
-FlingSection:Slider({
-    Title = "Fling power",
+local FlingSec = MM2Tab:Section({ Title = "Fling" })
+FlingSec:Slider({ Title = "Fling power",
     Value = { Min = 20000, Max = 200000, Default = 80000 },
-    Callback = function(v) DW.flingPower = v end,
-})
-FlingSection:Slider({
-    Title = "Fling duration",
+    Callback = function(v) DW.flingPower = v end })
+FlingSec:Slider({ Title = "Fling duration",
     Value = { Min = 0.5, Max = 5, Default = 1.8 },
-    Callback = function(v) DW.flingTime = v end,
-})
-FlingSection:Dropdown({
-    Title = "Fling method", Values = { "Velocity", "Angular", "Both" }, Value = "Both",
-    Callback = function(v) DW.flingMethod = v end,
-})
+    Callback = function(v) DW.flingTime = v end })
+FlingSec:Dropdown({ Title = "Fling method",
+    Values = { "Velocity", "Angular", "Both" }, Value = "Both",
+    Callback = function(v) DW.flingMethod = v end })
 
 local function flingPlayer(plr, label)
     if DW.flinging then return end
-    if DW.flying then notify("Fling", "Turn Fly off first.", 2); return end
+    if DW.flying then notify("Fling", "Turn Fly off first.", 2, "Warning"); return end
     local root, hum = getRoot(), getHum()
     local tChar = plr and plr.Character
     local tRoot = tChar and tChar:FindFirstChild("HumanoidRootPart")
     local tHum = tChar and tChar:FindFirstChildOfClass("Humanoid")
-    if not root or not hum then notify("Fling", "No character.", 2); return end
+    if not root or not hum then notify("Fling", "No character.", 2, "Warning"); return end
     if not tRoot or not tHum or tHum.Health <= 0 then
-        notify("Fling", (label or "Target") .. " not found.", 2); return
+        notify("Fling", (label or "Target") .. " not found.", 2, "Warning"); return
     end
     DW.flinging = true
     local origin = root.CFrame
@@ -1344,60 +1357,46 @@ local function flingPlayer(plr, label)
     end
     DW.noclip = prevNoclip
     DW.flinging = false
-    notify("Fling", "Flung " .. plr.DisplayName .. ".", 2)
+    notify("Fling", "Flung " .. plr.DisplayName .. ".", 2, "Success")
 end
 
-FlingSection:Button({
-    Title = "Fling murderer",
-    Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getMurderer(), "Murderer") end,
-})
-FlingSection:Button({
-    Title = "Fling sheriff",
-    Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getSheriff(), "Sheriff") end,
-})
+FlingSec:Button({ Title = "Fling murderer", Icon = "wind",
+    Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getMurderer(), "Murderer") end })
+FlingSec:Button({ Title = "Fling sheriff", Icon = "wind",
+    Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getSheriff(), "Sheriff") end })
 
 -- ═════════════════════════════ MISC TAB ═════════════════════════════
 local MiscTab = Window:Tab({ Title = "Misc", Icon = "settings" })
 
-local UtilSection = MiscTab:Section({ Title = "Utility" })
+local UtilSec = MiscTab:Section({ Title = "Utility" })
 DW.antiAfk = true
-UtilSection:Toggle({
-    Title = "Anti-AFK", Value = true,
-    Callback = function(v) DW.antiAfk = v end,
-})
+UtilSec:Toggle({ Title = "Anti-AFK", Value = true,
+    Callback = function(v) DW.antiAfk = v end })
 track(LocalPlayer.Idled:Connect(function()
     if not DW.antiAfk then return end
     pcall(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end)
 end))
-UtilSection:Button({
-    Title = "Reset character",
-    Callback = function() local h = getHum(); if h then h.Health = 0 end end,
-})
-UtilSection:Input({
-    Title = "Quick note", Value = "", Placeholder = "Type something...",
-    Callback = function(s) notify("Note", s ~= "" and s or "(empty)", 2) end,
-})
+UtilSec:Button({ Title = "Reset character", Icon = "refresh-cw",
+    Callback = function() local h = getHum(); if h then h.Health = 0 end end })
+UtilSec:Input({ Title = "Quick note", Value = "", Placeholder = "Type something...",
+    Callback = function(s) notify("Note", s ~= "" and s or "(empty)", 2, "Info") end })
 
-local ServerSection = MiscTab:Section({ Title = "Server" })
-ServerSection:Button({
-    Title = "Copy Job ID",
+local ServerSec = MiscTab:Section({ Title = "Server" })
+ServerSec:Button({ Title = "Copy Job ID", Icon = "copy",
     Callback = function()
         pcall(function() setclipboard(game.JobId) end)
-        notify("Copied", "Job ID copied.", 2)
-    end,
-})
-ServerSection:Button({
-    Title = "Rejoin server",
+        notify("Copied", "Job ID copied.", 2, "Success")
+    end })
+ServerSec:Button({ Title = "Rejoin server", Icon = "log-out",
     Callback = function()
-        notify("Rejoining", "Teleporting back…", 2); task.wait(0.5)
+        notify("Rejoining", "Teleporting back…", 2, "Info"); task.wait(0.5)
         if #Players:GetPlayers() <= 1 then
             LocalPlayer:Kick("\nRejoining…"); task.wait()
             TeleportService:Teleport(game.PlaceId, LocalPlayer)
         else
             TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
         end
-    end,
-})
+    end })
 
 local function unloadAll()
     stopFly(); stopBundleAnim()
@@ -1411,11 +1410,10 @@ local function unloadAll()
     table.clear(Connections)
     WindUI:Destroy()
 end
-
-ServerSection:Button({ Title = "Unload Dragon Ware", Callback = unloadAll })
+ServerSec:Button({ Title = "Unload Dragon Ware", Icon = "x", Callback = unloadAll })
 
 -- Anti-Fling
-local AntiFlingSection = MiscTab:Section({ Title = "Anti-Fling" })
+local AntiFlingSec = MiscTab:Section({ Title = "Anti-Fling" })
 track(RunService.Heartbeat:Connect(function()
     if not DW.antiflingOn then return end
     if DW.flying or DW.flinging then return end
@@ -1433,22 +1431,15 @@ track(RunService.Heartbeat:Connect(function()
     DW.antiflingLastPos = pos
     DW.antiflingLastTime = now
 end))
-AntiFlingSection:Toggle({
-    Title = "Anti-Fling", Value = false,
-    Callback = function(v) DW.antiflingOn = v; if v then DW.antiflingLastPos = nil end end,
-})
-AntiFlingSection:Slider({
-    Title = "Threshold",
-    Value = { Min = 20, Max = 500, Default = 100 },
-    Callback = function(v) DW.antiflingThreshold = v end,
-})
-AntiFlingSection:Toggle({
-    Title = "Snap back", Value = true,
-    Callback = function(v) DW.antiflingSnap = v end,
-})
+AntiFlingSec:Toggle({ Title = "Anti-Fling", Value = false,
+    Callback = function(v) DW.antiflingOn = v; if v then DW.antiflingLastPos = nil end end })
+AntiFlingSec:Slider({ Title = "Threshold", Value = { Min = 20, Max = 500, Default = 100 },
+    Callback = function(v) DW.antiflingThreshold = v end })
+AntiFlingSec:Toggle({ Title = "Snap back", Value = true,
+    Callback = function(v) DW.antiflingSnap = v end })
 
 -- FPS Booster
-local FpsSection = MiscTab:Section({ Title = "FPS Booster" })
+local FpsSec = MiscTab:Section({ Title = "FPS Booster" })
 
 local function applyFpsBoost()
     for _, item in ipairs(DW.fpsBoostClean) do
@@ -1474,21 +1465,17 @@ local function applyFpsBoost()
             fx.Enabled = false
         end
     end
-    notify("FPS Booster", "Applied (" .. DW.fpsBoostLevel .. ")", 2)
+    notify("FPS Booster", "Applied (" .. DW.fpsBoostLevel .. ")", 2, "Success")
 end
 
-FpsSection:Toggle({
-    Title = "FPS Booster", Value = false,
-    Callback = function(v) DW.fpsBoostOn = v; applyFpsBoost() end,
-})
-FpsSection:Dropdown({
-    Title = "Level", Values = { "Low", "Medium", "High" }, Value = "Medium",
-    Callback = function(v) DW.fpsBoostLevel = v; if DW.fpsBoostOn then applyFpsBoost() end end,
-})
-FpsSection:Button({ Title = "Apply now", Callback = applyFpsBoost })
+FpsSec:Toggle({ Title = "FPS Booster", Value = false,
+    Callback = function(v) DW.fpsBoostOn = v; applyFpsBoost() end })
+FpsSec:Dropdown({ Title = "Level", Values = { "Low", "Medium", "High" }, Value = "Medium",
+    Callback = function(v) DW.fpsBoostLevel = v; if DW.fpsBoostOn then applyFpsBoost() end end })
+FpsSec:Button({ Title = "Apply now", Icon = "zap", Callback = applyFpsBoost })
 
 -- Kill Sound
-local KillSoundSection = MiscTab:Section({ Title = "Kill Sound" })
+local KillSoundSec = MiscTab:Section({ Title = "Kill Sound" })
 local killPacks = {
     Neverlose = "rbxassetid://8679627751", Neverlose2 = "rbxassetid://6895079853",
     Nixware = "rbxassetid://6042053626", Gamesense = "rbxassetid://4814280505",
@@ -1540,33 +1527,24 @@ end
 for _, plr in ipairs(Players:GetPlayers()) do watchKillerPlayer(plr) end
 track(Players.PlayerAdded:Connect(watchKillerPlayer))
 
-local killSoundToggle = KillSoundSection:Toggle({
+local killSoundToggle = KillSoundSec:Toggle({
     Title = "Kill sound (murderer death)", Value = false,
-    Callback = function(v) DW.killSoundOn = v end,
-})
-KillSoundSection:Dropdown({
-    Title = "Sound pack",
+    Callback = function(v) DW.killSoundOn = v end })
+KillSoundSec:Dropdown({ Title = "Sound pack",
     Values = { "Neverlose", "Neverlose2", "Nixware", "Gamesense", "Fatality", "Skeet", "CSGO", "Headshot", "Hitmarker", "Custom" },
     Value = "Neverlose",
-    Callback = function(v) DW.killSoundPack = v end,
-})
-KillSoundSection:Input({
-    Title = "Custom sound ID", Value = "", Placeholder = "rbxassetid://...",
-    Callback = function(s) DW.killSoundCustomId = s end,
-})
-KillSoundSection:Slider({
-    Title = "Volume",
-    Value = { Min = 0.1, Max = 5, Default = 1.5 },
-    Callback = function(v) DW.killSoundVolume = v end,
-})
-KillSoundSection:Toggle({
-    Title = "Only when I'm Sheriff", Value = false,
-    Callback = function(v) DW.killSoundOnlyMe = v end,
-})
-KillSoundSection:Button({ Title = "Test sound", Callback = playKillSound })
+    Callback = function(v) DW.killSoundPack = v end })
+KillSoundSec:Input({ Title = "Custom sound ID", Value = "",
+    Placeholder = "rbxassetid://...",
+    Callback = function(s) DW.killSoundCustomId = s end })
+KillSoundSec:Slider({ Title = "Volume", Value = { Min = 0.1, Max = 5, Default = 1.5 },
+    Callback = function(v) DW.killSoundVolume = v end })
+KillSoundSec:Toggle({ Title = "Only when I'm Sheriff", Value = false,
+    Callback = function(v) DW.killSoundOnlyMe = v end })
+KillSoundSec:Button({ Title = "Test sound", Icon = "music", Callback = playKillSound })
 
 -- Trade
-local TradeSection = MiscTab:Section({ Title = "Trade" })
+local TradeSec = MiscTab:Section({ Title = "Trade" })
 local function scanTradeRemotes()
     DW.tradeRemotes = {}
     for _, obj in ipairs(RS:GetDescendants()) do
@@ -1593,25 +1571,21 @@ local function playerNames()
     return names
 end
 
-TradeSection:Dropdown({
-    Title = "Target player", Values = playerNames(), Value = playerNames()[1],
-    Callback = function(v) DW.selectedPlayer = v end,
-})
-TradeSection:Input({
-    Title = "Whitelist (ники через запятую)", Value = "",
+TradeSec:Dropdown({ Title = "Target player", Values = playerNames(), Value = playerNames()[1],
+    Callback = function(v) DW.selectedPlayer = v end })
+TradeSec:Input({ Title = "Whitelist (ники через запятую)", Value = "",
     Placeholder = "user1, user2",
     Callback = function(s)
         DW.whitelist = {}
         for name in string.gmatch(s, "[^,%s]+") do
             DW.whitelist[string.lower(name)] = true
         end
-    end,
-})
+    end })
 
 local function sendTradeRequest(targetName)
-    if not targetName then notify("Trade", "No target.", 2); return end
+    if not targetName then notify("Trade", "No target.", 2, "Warning"); return end
     local target = Players:FindFirstChild(targetName)
-    if not target then notify("Trade", "Player not found.", 2); return end
+    if not target then notify("Trade", "Player not found.", 2, "Warning"); return end
     local sent = false
     for _, r in ipairs(DW.tradeRemotes) do
         if r:IsA("RemoteEvent") then
@@ -1619,43 +1593,36 @@ local function sendTradeRequest(targetName)
             if sent then break end
         end
     end
-    notify("Trade", sent and ("Sent to " .. target.DisplayName) or "No trade remote.", 2)
+    notify("Trade", sent and ("Sent to " .. target.DisplayName) or "No trade remote.", 2,
+        sent and "Success" or "Warning")
 end
 
-TradeSection:Button({
-    Title = "Send trade request",
-    Callback = function() sendTradeRequest(DW.selectedPlayer) end,
-})
-TradeSection:Button({
-    Title = "Accept pending trade",
+TradeSec:Button({ Title = "Send trade request", Icon = "send",
+    Callback = function() sendTradeRequest(DW.selectedPlayer) end })
+TradeSec:Button({ Title = "Accept pending trade", Icon = "check",
     Callback = function()
         for _, r in ipairs(DW.tradeRemotes) do
             if r:IsA("RemoteEvent") then pcall(function() r:FireServer("accept") end) end
         end
-        notify("Trade", "Accept sent.", 2)
-    end,
-})
-TradeSection:Button({
-    Title = "Decline pending trade",
+        notify("Trade", "Accept sent.", 2, "Success")
+    end })
+TradeSec:Button({ Title = "Decline pending trade", Icon = "x",
     Callback = function()
         for _, r in ipairs(DW.tradeRemotes) do
             if r:IsA("RemoteEvent") then pcall(function() r:FireServer("decline") end) end
         end
-        notify("Trade", "Decline sent.", 2)
-    end,
-})
-TradeSection:Button({
-    Title = "Rescan trade remotes",
+        notify("Trade", "Decline sent.", 2, "Success")
+    end })
+TradeSec:Button({ Title = "Rescan trade remotes", Icon = "refresh-cw",
     Callback = function()
         scanTradeRemotes()
-        notify("Trade", "Found " .. #DW.tradeRemotes .. " remotes.", 3)
-    end,
-})
+        notify("Trade", "Found " .. #DW.tradeRemotes .. " remotes.", 3, "Info")
+    end })
 
 -- ═════════════════════════════ MOBILE TAB ═══════════════════════════
 local MobileTab = Window:Tab({ Title = "Mobile", Icon = "smartphone" })
 
-local MobileSection = MobileTab:Section({ Title = "Master" })
+local MobileSec = MobileTab:Section({ Title = "Master" })
 
 local btnGui = Instance.new("ScreenGui")
 btnGui.Name = "DragonWareButtons"
@@ -1725,7 +1692,7 @@ local actions = {
     { id = "KAura",  text = "Killaura",       cb = function()
           if DW.kauraOn then DW.kauraOn = false; DW.kauraDelay = 0
           else DW.kauraOn = true; DW.kauraDelay = 0.6 end
-          notify("Killaura", DW.kauraOn and "On (0.6s)" or "Off", 1.5)
+          notify("Killaura", DW.kauraOn and "On (0.6s)" or "Off", 1.5, "Info")
       end },
     { id = "Aura",   text = "Auras",          cb = function() DW.auraOn = not DW.auraOn end },
     { id = "Cross",  text = "Crosshair",      cb = function() DW.crossOn = not DW.crossOn; rebuildCrosshair() end },
@@ -1740,98 +1707,67 @@ for i, a in ipairs(actions) do
     makeButton(a.id, a.text, -200 + (i - 1) * 48, a.cb)
 end
 
-MobileSection:Toggle({
-    Title = "Show all buttons", Value = false,
+MobileSec:Toggle({ Title = "Show all buttons", Value = false,
     Callback = function(v)
         for _, b in pairs(DW.onScreen) do b.Visible = v end
-    end,
-})
-MobileSection:Slider({
-    Title = "Button size",
-    Value = { Min = 80, Max = 200, Default = 130 },
+    end })
+MobileSec:Slider({ Title = "Button size", Value = { Min = 80, Max = 200, Default = 130 },
     Callback = function(v)
         DW.buttonSize = v
         for _, b in pairs(DW.onScreen) do b.Size = UDim2.fromOffset(v, 44) end
-    end,
-})
+    end })
 
-local BtnListSection = MobileTab:Section({ Title = "On-screen buttons" })
+local BtnListSec = MobileTab:Section({ Title = "On-screen buttons" })
 for _, a in ipairs(actions) do
-    BtnListSection:Toggle({
-        Title = "Show: " .. a.text, Value = false,
+    BtnListSec:Toggle({ Title = "Show: " .. a.text, Value = false,
         Callback = function(v)
             local b = DW.onScreen[a.id]
             if b then b.Visible = v end
-        end,
-    })
+        end })
 end
 
 -- ═════════════════════════════ BINDS TAB ════════════════════════════
 local BindsTab = Window:Tab({ Title = "Binds", Icon = "keyboard" })
-local BindsSection = BindsTab:Section({ Title = "Actions" })
+local BindsSec = BindsTab:Section({ Title = "Actions" })
 
-BindsSection:Keybind({
-    Title = "Shoot murderer", Value = "Q",
-    Callback = shootMurderer,
-})
-BindsSection:Keybind({
-    Title = "Grab gun", Value = "G",
-    Callback = function() grabGun(false) end,
-})
-BindsSection:Keybind({
-    Title = "Fling murderer", Value = "Z",
-    Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getMurderer(), "Murderer") end,
-})
-BindsSection:Keybind({
-    Title = "Fling sheriff", Value = "C",
-    Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getSheriff(), "Sheriff") end,
-})
-BindsSection:Keybind({
-    Title = "Bomb jump", Value = "B", Callback = bombJump,
-})
-BindsSection:Keybind({
-    Title = "Kill all", Value = "K", Callback = killAll,
-})
-BindsSection:Keybind({
-    Title = "Killaura toggle", Value = "H",
+BindsSec:Keybind({ Title = "Shoot murderer", Value = "Q", Callback = shootMurderer })
+BindsSec:Keybind({ Title = "Grab gun", Value = "G",
+    Callback = function() grabGun(false) end })
+BindsSec:Keybind({ Title = "Fling murderer", Value = "Z",
+    Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getMurderer(), "Murderer") end })
+BindsSec:Keybind({ Title = "Fling sheriff", Value = "C",
+    Callback = function() refreshRoles(); task.wait(0.2); flingPlayer(getSheriff(), "Sheriff") end })
+BindsSec:Keybind({ Title = "Bomb jump", Value = "B", Callback = bombJump })
+BindsSec:Keybind({ Title = "Kill all", Value = "K", Callback = killAll })
+BindsSec:Keybind({ Title = "Killaura toggle", Value = "H",
     Callback = function()
         if DW.kauraOn then DW.kauraOn = false; DW.kauraDelay = 0
         else DW.kauraOn = true; DW.kauraDelay = 0.6 end
-        notify("Killaura", DW.kauraOn and "On (0.6s)" or "Off", 1.5)
-    end,
-})
-BindsSection:Keybind({
-    Title = "Auras toggle", Value = "J",
-    Callback = function() DW.auraOn = not DW.auraOn end,
-})
-BindsSection:Keybind({
-    Title = "Crosshair toggle", Value = "N",
-    Callback = function() DW.crossOn = not DW.crossOn; rebuildCrosshair() end,
-})
-BindsSection:Keybind({
-    Title = "Kill sound toggle", Value = "M",
-    Callback = function() pcall(function() killSoundToggle:Set(not DW.killSoundOn) end) end,
-})
-BindsSection:Keybind({
-    Title = "Bundle anim toggle", Value = "L",
+        notify("Killaura", DW.kauraOn and "On (0.6s)" or "Off", 1.5, "Info")
+    end })
+BindsSec:Keybind({ Title = "Auras toggle", Value = "J",
+    Callback = function() DW.auraOn = not DW.auraOn end })
+BindsSec:Keybind({ Title = "Crosshair toggle", Value = "N",
+    Callback = function() DW.crossOn = not DW.crossOn; rebuildCrosshair() end })
+BindsSec:Keybind({ Title = "Kill sound toggle", Value = "M",
+    Callback = function() pcall(function() killSoundToggle:Set(not DW.killSoundOn) end) end })
+BindsSec:Keybind({ Title = "Bundle anim toggle", Value = "L",
     Callback = function()
         if DW.bundleAnimPlaying then stopBundleAnim()
         elseif DW.bundleAnimId ~= "" then playBundleAnim(DW.bundleAnimId) end
-    end,
-})
-BindsSection:Keybind({
-    Title = "Fly toggle", Value = "F",
-    Callback = function() if DW.flying then stopFly() else startFly() end end,
-})
-BindsSection:Keybind({
-    Title = "Noclip toggle", Value = "V",
-    Callback = function() DW.noclip = not DW.noclip end,
-})
-BindsSection:Keybind({
-    Title = "Spin bot toggle", Value = "X",
-    Callback = function() DW.spinOn = not DW.spinOn end,
-})
+    end })
+BindsSec:Keybind({ Title = "Fly toggle", Value = "F",
+    Callback = function() if DW.flying then stopFly() else startFly() end end })
+BindsSec:Keybind({ Title = "Noclip toggle", Value = "V",
+    Callback = function() DW.noclip = not DW.noclip end })
+BindsSec:Keybind({ Title = "Spin bot toggle", Value = "X",
+    Callback = function() DW.spinOn = not DW.spinOn end })
+BindsSec:Keybind({ Title = "Silent aim toggle", Value = "P",
+    Callback = function()
+        DW.silentAimOn = not DW.silentAimOn
+        notify("Silent aim", DW.silentAimOn and "On" or "Off", 1.5, "Info")
+    end })
 
 -- ═════════════════════════════ READY ════════════════════════════════
-notify("Dragon Ware", "Loaded. WindUI active.", 3)
+notify("Dragon Ware", "Loaded. WindUI active. Menu key: 0", 3, "Success")
 return nil
